@@ -1,0 +1,17 @@
+{
+  "slug": "webhook-quiet-hours",
+  "title": "Webhook Quiet Hours",
+  "territory": "devtools-data",
+  "user": "Small engineering teams receiving internal webhooks who need actionable failures without routing every event into Slack.",
+  "smallest_useful_product": "Self-hosted receiver with signed endpoint aliases, event fingerprints, digest/quiet-hour rules, and a single escalation link.",
+  "success_measure": "Reduce webhook-channel messages by 70% while acknowledging every configured high-severity fingerprint within its target time.",
+  "artifact_class": "web-with-backend",
+  "monetization": "one-time",
+  "constraints": [
+    "Verify provider signatures where available",
+    "Encrypt retained payloads",
+    "Configurable deletion",
+    "No cross-tenant telemetry"
+  ],
+  "non_goals": ["Webhook delivery/retry service", "General automation platform"]
+}
