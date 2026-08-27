@@ -216,9 +216,9 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
         .route("/settings", get(get_settings).put(update_settings))
         .route("/digest/send", post(send_digest_now))
         .route("/export.csv", get(export_csv))
+        .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(state.clone(), admin_auth));
-    let static_service =
-        ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html")));
+    let static_service = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
     Router::new()
         .route("/health", get(health))
         .merge(hook)
@@ -253,6 +253,13 @@ async fn admin_auth(
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"status":"ok", "build_sha": state.build_sha}))
+}
+
+async fn api_not_found() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"error":"That API route does not exist."})),
+    )
 }
 
 #[derive(Serialize)]
@@ -647,6 +654,20 @@ async fn update_fingerprint(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    if input.severity == "high" {
+        let row =
+            sqlx::query("SELECT event_type,total_count FROM fingerprints WHERE fingerprint=?")
+                .bind(&fp)
+                .fetch_one(&state.pool)
+                .await?;
+        notify_high(
+            &state,
+            &fp,
+            &row.get::<String, _>("event_type"),
+            row.get("total_count"),
+        )
+        .await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -829,7 +850,7 @@ pub async fn run_digest(state: &AppState, force: bool) -> Result<usize, AppError
         return Ok(0);
     }
     let cutoff = (Utc::now() - ChronoDuration::minutes(settings.digest_minutes)).to_rfc3339();
-    let rows=sqlx::query("SELECT fingerprint,event_type,pending_count FROM fingerprints WHERE severity='normal' AND pending_count>0 AND (? OR last_notified_at IS NULL OR last_notified_at<?) ORDER BY pending_count DESC LIMIT 12").bind(force).bind(cutoff).fetch_all(&state.pool).await?;
+    let rows=sqlx::query("SELECT fingerprint,event_type,pending_count FROM fingerprints WHERE severity='normal' AND pending_count>0 AND (? OR (last_notified_at IS NULL AND first_seen<?) OR last_notified_at<?) ORDER BY pending_count DESC LIMIT 12").bind(force).bind(&cutoff).bind(&cutoff).fetch_all(&state.pool).await?;
     if rows.is_empty() {
         return Ok(0);
     }

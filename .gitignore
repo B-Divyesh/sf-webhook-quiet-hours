@@ -1,6 +1,8 @@
 /data/
 /dist/
-/node_modules/
+/.factory/evidence/
+node_modules/
+/graphify-out/
 /target/
 *.db
 *.db-shm
