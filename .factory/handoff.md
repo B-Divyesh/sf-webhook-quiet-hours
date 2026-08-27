@@ -70,8 +70,8 @@ The deploy target is the container on `PORT=8080`; persistent data is
   create-alias → HMAC-sign → receive → fingerprint integration test.
 - `npm run check`: pass — strict TypeScript, rustfmt, and Clippy with warnings as
   errors.
-- `npm run build`: pass — output at `dist/index.html`; initial JS 26.40 KB raw
-  (9.10 KB gzip), CSS 15.66 KB raw (4.49 KB gzip), mobile hero 24 KB.
+- `npm run build`: pass — output at `dist/index.html`; initial JS 26.23 KB raw
+  (9.07 KB gzip), CSS 15.69 KB raw (4.50 KB gzip), mobile hero 24 KB.
 - `cargo build --release --locked`: pass.
 - Production-mode release binary: pass — `/`, `/privacy`, `/terms`, and
   `/health` return HTTP 200 with required production configuration.
