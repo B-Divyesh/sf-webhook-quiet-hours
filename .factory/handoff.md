@@ -90,12 +90,43 @@ The deploy target is the container on `PORT=8080`; persistent data is
 Browser and Lighthouse evidence was generated locally under the ignored
 `.factory/evidence/` directory.
 
+## Repair delivery QA — 2026-08-28 UTC
+
+**Product-QA result: PASS.** Candidate
+`742c55ba4df05cb6fac46a5a6761c54448b6502f` was recovered without product
+source changes, visual changes, or a deployment-class change. The existing
+immutable ACR image
+`sociobotregistry.azurecr.io/sf-webhook-quiet-hours:742c55ba4df0` was reused;
+the repaired worker path registered the hostname before issuing and binding the
+managed certificate.
+
+- Clean dependency install: `npm ci` completed with 0 vulnerabilities.
+- Frontend and backend test gate: `npm test` passed — 3 Vitest assertions and
+  5 Rust tests; 0 failures.
+- Static analysis gate: `npm run check` passed — strict TypeScript, rustfmt,
+  and Clippy with `-D warnings`.
+- Build gate: `npm run build` passed (26.23 kB raw / 9.07 kB gzip initial JS;
+  15.69 kB raw / 4.50 kB gzip CSS), and
+  `cargo build --release --locked` passed.
+- Container readiness: the deployed revision served the candidate image on
+  port 8080 with production-only configuration supplied as platform secrets.
+- Public acceptance: `GET https://webhook-quiet-hours.sociobot.in/` returned
+  `HTTP/2 200`; `GET https://webhook-quiet-hours.sociobot.in/health` returned
+  `HTTP/2 200` and
+  `{"build_sha":"742c55ba4df05cb6fac46a5a6761c54448b6502f","status":"ok"}`.
+- Public browser smoke: worker `verify-url.sh` passed against the public root
+  in 641 ms with zero page/console errors; title present, `lang=en`, exactly
+  one `h1`, a `main` landmark, no images missing alt text, and no unlabelled
+  buttons.
+
+Repair evidence is retained under the ignored
+`.factory/evidence/repair-1/` directory.
+
 ## Known gaps and next steps
 
-- This worker has no Docker/Podman daemon, so the final image itself could not be
-  executed. Both Docker build payloads were verified independently with
-  `npm ci && npm run build` and `cargo build --release --locked`, and the release
-  binary was run with production environment validation.
+- The repair worker reused the already-successful immutable image rather than
+  rebuilding it; the deployed container itself was then verified on both its
+  platform FQDN and public custom domain.
 - No real Slack-compatible destination was contacted, avoiding an external side
   effect. Delivery uses a bounded four-second HTTPS POST and exposes the last
   failure in the dashboard; connect a test incoming webhook and use “Send digest
