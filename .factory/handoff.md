@@ -1,5 +1,91 @@
 # Webhook Quiet Hours — build handoff
 
+## Repair 3 — zero-configuration production startup (2026-08-28 UTC)
+
+**Product-QA result: PASS.** The release blocker in
+`.factory/verification-2.md` is repaired without changing the researched scope,
+visual system, artifact class, API behavior, or deployment class.
+
+### Finding, reproduction, and root-cause repair
+
+- Before the repair, the verifier's production command
+  `env -i APP_ENV=production PORT=18081 target/release/webhook-quiet-hours`
+  exited 1 with `ADMIN_TOKEN is required in production`.
+- `AppConfig::from_env` no longer substitutes a development credential or
+  requires secret environment variables. When absent, it creates independent
+  256-bit values with `OsRng`, stores them as `admin-token` and
+  `encryption-key` beside the SQLite database, and reuses those files on later
+  boots. Files are written via a same-directory temporary file, synced,
+  atomically renamed, and mode `0600` on Unix.
+- Valid `ADMIN_TOKEN` and `DATA_ENCRYPTION_KEY` values still override the
+  persisted defaults. Startup logs a single structured line with only
+  `generated`, `persisted`, or `supplied` source labels and the storage
+  directory; secret values never enter logs.
+- The dashboard and README now tell an operator where to retrieve the generated
+  admin token. Container and local defaults remain `/app/data` and `data/`
+  respectively.
+- `tests/runtime_startup.rs` is the exact process-level regression: it clears
+  the child environment, supplies only `PORT`, reaches `/health`, checks both
+  0600 files, authenticates with the generated token, creates an encrypted
+  signed alias, restarts in the Dockerfile's `APP_ENV=production` mode without
+  either secret, submits a valid signed event, verifies the files are unchanged,
+  and asserts generated/persisted log provenance without secret disclosure.
+
+### Clean release evidence
+
+- `npm ci`: passed; 55 packages installed, 0 vulnerabilities.
+- `npm test`: passed; 3 Vitest tests, 6 Rust unit/router tests, and 1 binary
+  startup/restart integration test.
+- `npm run check`: passed; strict TypeScript, rustfmt, and Clippy with warnings
+  denied.
+- `npm run build`: passed and produced `dist/`; initial JS 26,265 bytes raw /
+  9.08 KB gzip, CSS 15,691 bytes raw / 4.50 KB gzip, mobile hero 23,638 bytes.
+- `cargo build --release --locked`: passed.
+- Exact repaired-binary reproduction: fresh production boot returned
+  `{"build_sha":"development","status":"ok"}`, created both secret files at
+  mode 600, and logged generated/generated; restart returned healthy and logged
+  persisted/persisted.
+- Backend/response-policy smoke: unauthenticated summary 401, unknown
+  authenticated API route 404, invalid alias 400, 262,144-byte ingress 202,
+  262,145-byte ingress 400, encrypted marker absent from raw SQLite, CSV 200
+  with `text/csv; charset=utf-8`, and 100 concurrent health requests passed.
+  The shell, service worker, legal routes, and SPA fallback are `no-cache`;
+  hashed assets are one-year immutable; public images are one-day cached. CSP,
+  `nosniff`, DENY framing, and `no-referrer` remain present.
+- Local browser QA at 1440×900 and 390×844 passed 39 assertions: one h1/main,
+  no horizontal overflow, no public console/page errors or third-party
+  requests, visible 3 px skip-link focus, keyboard-semantic tab access, dialog
+  focus placement, alias creation and one-time secret UI, dark treatment,
+  reduced motion, privacy/terms, service-worker control, and offline mobile
+  reload. Axe reported zero violations on landing light/dark, dashboard, alias
+  dialog, privacy, and terms.
+- Local mobile Lighthouse: Performance 100, Accessibility 100, Best Practices
+  100, SEO 92; LCP 1,277 ms, TBT 38 ms, CLS 0.
+
+### Container and live acceptance
+
+- The work-order deployer completed ACR build run `chbp` for
+  `sociobotregistry.azurecr.io/sf-webhook-quiet-hours:0bc9d6f4a429`, digest
+  `sha256:9033f86dd14856b256b490c7d8b395102e7dde66a991461148ec34081ea3cca0`.
+  The Dockerfile built without `.git`, runs as the non-root `quiet-hours` user,
+  and receives build identity through `BUILD_SHA`.
+- Container Apps revision `sf-webhook-quiet-hours--0000007` reached Succeeded
+  with exactly one configured runtime environment name, `PORT`. Its startup log
+  reported generated/generated at `/app/data`, proving the public container did
+  not depend on externally injected secrets.
+- Public `/health` returned HTTP 200 and exact build identity
+  `0bc9d6f4a429ff265cdc8f531e840ae3cb24f4b5`. Factory `verify-url.sh` returned
+  200 with no console/page errors. Six live desktop/mobile page audits covering
+  root, privacy, and terms had zero axe violations, no overflow, and no
+  third-party requests; reduced motion and offline reload passed.
+- Live mobile Lighthouse: Performance 100, Accessibility 100, Best Practices
+  100, SEO 92; LCP 930 ms, TBT 7 ms, CLS 0.
+
+Ignored reproducibility artifacts, JSON reports, logs, and screenshots are in
+`.factory/evidence/repair-3/`. No real notification webhook, billing purchase,
+or billing configuration was mutated during functional QA; deployment used the
+factory-managed DNS and certificate path from the work order.
+
 ## Independent verification 2 — FAIL (2026-08-28 UTC)
 
 **Candidate `a607aa5bd48d24a4b741db08e0438db76ece6469` fails the supplied
@@ -111,8 +197,8 @@ SQLite is the only state dependency.
   HMAC-SHA256 verification (`X-Hub-Signature-256` and
   `X-Webhook-Signature`). Secrets are shown once.
 - AES-256-GCM encryption at rest for retained raw payloads, HMAC secrets, and the
-  notification destination. Production startup requires an admin token and a
-  32-byte base64 encryption key.
+  notification destination. Missing credentials are generated with a CSPRNG and
+  persisted beside SQLite; environment values remain optional overrides.
 - Stable event fingerprints derived from endpoint, event type, top-level shape,
   and status/error; repeat counts are compressed without losing the latest
   encrypted sample.
@@ -155,15 +241,13 @@ Production container:
 ```sh
 docker build -t webhook-quiet-hours .
 docker run --rm -p 8080:8080 \
-  -e ADMIN_TOKEN='<long random value>' \
-  -e DATA_ENCRYPTION_KEY='<base64 32-byte value>' \
-  -e PUBLIC_URL='https://webhook-quiet-hours.sociobot.in' \
   -v webhook-quiet-hours-data:/app/data \
   webhook-quiet-hours
 ```
 
 The deploy target is the container on `PORT=8080`; persistent data is
-`/app/data`. `GET /health` returns status and `BUILD_SHA`.
+`/app/data`. Read the first-boot dashboard credential from
+`/app/data/admin-token`. `GET /health` returns status and `BUILD_SHA`.
 
 ## Verification completed
 
@@ -225,9 +309,6 @@ Repair evidence is retained under the ignored
 
 ## Known gaps and next steps
 
-- The repair worker reused the already-successful immutable image rather than
-  rebuilding it; the deployed container itself was then verified on both its
-  platform FQDN and public custom domain.
 - No real Slack-compatible destination was contacted, avoiding an external side
   effect. Delivery uses a bounded four-second HTTPS POST and exposes the last
   failure in the dashboard; connect a test incoming webhook and use “Send digest
