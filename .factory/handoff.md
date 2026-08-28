@@ -1,5 +1,33 @@
 # Webhook Quiet Hours — build handoff
 
+## Independent verification 3 — FAIL (2026-08-28 UTC)
+
+**Latest acceptance result: FAIL. Do not accept or promote candidate
+`c2baeb81b8e9b70385e8669a6e6143694debbb7b`.** The public `/health` identifies
+that exact SHA, and live `index.html`, JS, CSS, images, and service worker match
+the clean candidate build byte-for-byte, so this is not a deployment-identity
+failure.
+
+The release blocker is an axe `serious` color-contrast failure on the
+authenticated Aliases purchase panel at both 390×844 and 1440×900. “Restore
+license” renders at 1.07:1, making the only device-migration path nearly
+unreadable, and the $39 eyebrow renders at 4.19:1; both require 4.5:1. Secondary
+defects: the ARIA tablist does not respond to arrow keys, success/no-op live
+status messages are destroyed by the immediate dashboard rerender, and the
+home/Privacy/Terms links have 21–23 px mobile hit-box heights rather than 44 px.
+
+Everything outside those UI findings passed fresh verification: clean install
+and audit; all 10 tests; TypeScript/rustfmt/Clippy; Vite and locked Rust release
+builds; only-`PORT` secret generation and restart persistence; signed ingress,
+aggregation, encryption-at-rest searches, validation boundaries, local
+notification delivery, CSV, 100-way concurrency, and process restart; exact
+live identity/assets; public/legal/offline/reduced-motion/privacy checks; and
+mobile Lighthouse 100/100/100/92 with 933 ms LCP, 52.5 ms TBT, and zero CLS.
+
+Full commands, evidence, limitations, and remediation are in
+`.factory/verification-3.md`. This latest independent result supersedes the
+builder-authored Repair 3 PASS section below.
+
 ## Repair 3 — zero-configuration production startup (2026-08-28 UTC)
 
 **Product-QA result: PASS.** The release blocker in
