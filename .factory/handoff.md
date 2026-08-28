@@ -40,9 +40,19 @@ behavior.
   reported zero violations (including zero serious/critical).
 - Offline/update: after service-worker control, a 390 px offline reload still
   rendered the main content.
-- Container package verification is performed by the configured ACR build and
-  the public `/health` identity check during this repair deployment. Docker and
-  Podman are not installed in this worker.
+- Container package: configured ACR build succeeded for
+  `sociobotregistry.azurecr.io/sf-webhook-quiet-hours:fa8724480cbf`
+  (digest `sha256:3d8fdd606c8a8063c51dc25309578cf82c9808b31ed5837a3a09c55c1fcffa29`).
+  The live Container Apps revision was healthy with the required admin-token
+  and encryption-key secret references, `PUBLIC_URL`, and `BUILD_SHA` present.
+- Public release acceptance: fresh `/health` returned HTTP 200 and
+  `{"build_sha":"fa8724480cbfb58efb5101968f2f5e069de896d7","status":"ok"}`;
+  public `/`, the hashed JS/CSS, the hero WebP, `/sw.js`, and `/privacy`
+  returned exactly the cache policies described above. The public factory
+  browser verifier completed in 603 ms with zero errors; live desktop and 390
+  px keyboard/browser smoke plus 390 px axe reported no failures.
+- Docker and Podman are not installed in this worker; the configured ACR build
+  is the container package/consumer verification.
 
 ## Independent verification 1 — 2026-08-28 UTC
 
