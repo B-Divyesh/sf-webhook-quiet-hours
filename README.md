@@ -35,13 +35,15 @@ Requirements: Node 22+, Rust 1.89+, and a C toolchain.
 ```sh
 npm ci
 npm run build
-ADMIN_TOKEN=local-dev-token cargo run
+cargo run
 ```
 
-Open `http://localhost:8080`. The development fallback token is
-`local-dev-token`; set a real token whenever the server is reachable by others.
-For live frontend reload, run `npm run dev` alongside `cargo run` and open port
-5173.
+Open `http://localhost:8080`. On first boot the server generates an admin token
+and encryption key with the operating system CSPRNG and writes them to
+`data/admin-token` and `data/encryption-key` with owner-only permissions. Paste
+the value from `data/admin-token` into the dashboard login. Keep the whole
+`data/` directory private and backed up. For live frontend reload, run
+`npm run dev` alongside `cargo run` and open port 5173.
 
 Quality commands:
 
@@ -54,12 +56,16 @@ cargo build --release --locked
 
 ## Production configuration
 
-The container refuses to start in production without the two secrets below.
+The container starts with no runtime configuration other than `PORT`. At first
+boot it generates and persists both secrets beside the SQLite database under
+`/app/data`; subsequent boots reuse them. Explicit environment values override
+the persisted defaults. Startup emits only whether each value was `generated`,
+`persisted`, or `supplied`—never the secret itself.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `ADMIN_TOKEN` | production | `local-dev-token` in development | Dashboard bearer token |
-| `DATA_ENCRYPTION_KEY` | production | development-only derived key | Base64 encoding of exactly 32 random bytes |
+| `ADMIN_TOKEN` | no | CSPRNG value persisted beside SQLite | Dashboard bearer token |
+| `DATA_ENCRYPTION_KEY` | no | CSPRNG value persisted beside SQLite | Base64 encoding of exactly 32 random bytes |
 | `DATABASE_URL` | no | `sqlite://data/quiet-hours.db?mode=rwc` | SQLite connection URL |
 | `PUBLIC_URL` | no | `http://localhost:8080` | Base used in generated hooks/review links |
 | `PORT` | no | `8080` | HTTP listener |
@@ -67,7 +73,8 @@ The container refuses to start in production without the two secrets below.
 | `DIST_DIR` | no | `dist` | Built frontend directory |
 | `VITE_BILLING_BASE` | build only | `https://api.sociobot.in` | Use `https://pilot-api.sociobot.in` for staging |
 
-Generate a key without storing it in the repository:
+To override the generated encryption key, create one without storing it in the
+repository:
 
 ```sh
 openssl rand -base64 32
@@ -81,16 +88,19 @@ docker build \
   --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
   -t webhook-quiet-hours .
 docker run --rm -p 8080:8080 \
-  -e ADMIN_TOKEN='replace-with-a-long-random-token' \
-  -e DATA_ENCRYPTION_KEY='replace-with-32-byte-base64' \
-  -e PUBLIC_URL='https://webhook-quiet-hours.sociobot.in' \
   -v webhook-quiet-hours-data:/app/data \
   webhook-quiet-hours
 ```
 
+Read the generated login token with
+`docker exec <container> cat /app/data/admin-token`. In a managed deployment,
+read the same file from the mounted data volume or supply `ADMIN_TOKEN` through
+its secret manager. Supply `PUBLIC_URL` when generated receiver URLs must use a
+public hostname; it is not required for startup.
+
 Terminate with SIGTERM for graceful shutdown. Back up the SQLite volume and the
-encryption key together; retained ciphertext cannot be recovered without that
-key.
+two generated secret files together; retained ciphertext cannot be recovered
+without `encryption-key`, and dashboard access depends on `admin-token`.
 
 ## Sending a signed webhook
 

@@ -6,12 +6,21 @@ use webhook_quiet_hours::{build_app, spawn_maintenance, AppConfig, AppState};
 
 #[tokio::main]
 async fn main() -> anyhowless::Result<()> {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("webhook_quiet_hours=info,tower_http=info")
+    });
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .init();
 
     let config = AppConfig::from_env()?;
+    info!(
+        admin_token_source = config.admin_token_source(),
+        encryption_key_source = config.encryption_key_source(),
+        secret_directory = %config.secret_directory().display(),
+        "runtime secrets resolved"
+    );
     let port: u16 = env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())

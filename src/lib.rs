@@ -1,4 +1,11 @@
-use std::{collections::BTreeSet, env, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    io::Write,
+    path::{Path as FsPath, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use aes_gcm::{
     aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
@@ -40,36 +47,42 @@ pub struct AppConfig {
     pub encryption_key: [u8; 32],
     pub public_url: String,
     pub build_sha: String,
+    secret_sources: SecretSources,
+    secret_directory: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SecretSource {
+    Supplied,
+    Persisted,
+    Generated,
+}
+
+impl SecretSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Supplied => "supplied",
+            Self::Persisted => "persisted",
+            Self::Generated => "generated",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SecretSources {
+    admin_token: SecretSource,
+    encryption_key: SecretSource,
 }
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, AppError> {
-        let production = env::var("APP_ENV").as_deref() == Ok("production");
-        let admin_token = env::var("ADMIN_TOKEN").unwrap_or_else(|_| "local-dev-token".into());
-        if production && admin_token == "local-dev-token" {
-            return Err(AppError::Config(
-                "ADMIN_TOKEN is required in production".into(),
-            ));
-        }
-        let encryption_key = match env::var("DATA_ENCRYPTION_KEY") {
-            Ok(raw) => {
-                let decoded = BASE64
-                    .decode(raw)
-                    .map_err(|_| AppError::Config("DATA_ENCRYPTION_KEY must be base64".into()))?;
-                decoded.try_into().map_err(|_| {
-                    AppError::Config("DATA_ENCRYPTION_KEY must decode to exactly 32 bytes".into())
-                })?
-            }
-            Err(_) if production => {
-                return Err(AppError::Config(
-                    "DATA_ENCRYPTION_KEY is required in production".into(),
-                ))
-            }
-            Err(_) => Sha256::digest(b"webhook-quiet-hours-local-development-only").into(),
-        };
+        let database_url = env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "sqlite://data/quiet-hours.db?mode=rwc".into());
+        let secret_directory = secret_directory_for_database(&database_url);
+        let (admin_token, admin_source) = resolve_admin_token(&secret_directory)?;
+        let (encryption_key, encryption_source) = resolve_encryption_key(&secret_directory)?;
         Ok(Self {
-            database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://data/quiet-hours.db?mode=rwc".into()),
+            database_url,
             admin_token,
             encryption_key,
             public_url: env::var("PUBLIC_URL")
@@ -77,8 +90,138 @@ impl AppConfig {
                 .trim_end_matches('/')
                 .into(),
             build_sha: env::var("BUILD_SHA").unwrap_or_else(|_| "development".into()),
+            secret_sources: SecretSources {
+                admin_token: admin_source,
+                encryption_key: encryption_source,
+            },
+            secret_directory,
         })
     }
+
+    pub fn admin_token_source(&self) -> &'static str {
+        self.secret_sources.admin_token.as_str()
+    }
+
+    pub fn encryption_key_source(&self) -> &'static str {
+        self.secret_sources.encryption_key.as_str()
+    }
+
+    pub fn secret_directory(&self) -> &FsPath {
+        &self.secret_directory
+    }
+}
+
+fn secret_directory_for_database(database_url: &str) -> PathBuf {
+    database_url
+        .strip_prefix("sqlite://")
+        .and_then(|value| value.split('?').next())
+        .and_then(|value| FsPath::new(value).parent())
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(FsPath::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("data"))
+}
+
+fn resolve_admin_token(directory: &FsPath) -> Result<(String, SecretSource), AppError> {
+    match env::var("ADMIN_TOKEN") {
+        Ok(value) if value.trim().is_empty() => Err(AppError::Config(
+            "ADMIN_TOKEN must not be empty when supplied".into(),
+        )),
+        Ok(value) => Ok((value, SecretSource::Supplied)),
+        Err(env::VarError::NotUnicode(_)) => Err(AppError::Config(
+            "ADMIN_TOKEN must contain valid UTF-8".into(),
+        )),
+        Err(env::VarError::NotPresent) => {
+            let path = directory.join("admin-token");
+            if path.exists() {
+                let value = fs::read_to_string(&path)?.trim().to_owned();
+                if value.is_empty() {
+                    return Err(AppError::Config(format!(
+                        "persisted admin token is empty: {}",
+                        path.display()
+                    )));
+                }
+                return Ok((value, SecretSource::Persisted));
+            }
+            let mut random = [0_u8; 32];
+            OsRng.fill_bytes(&mut random);
+            let value = hex::encode(random);
+            persist_secret(&path, &value)?;
+            Ok((value, SecretSource::Generated))
+        }
+    }
+}
+
+fn resolve_encryption_key(directory: &FsPath) -> Result<([u8; 32], SecretSource), AppError> {
+    match env::var("DATA_ENCRYPTION_KEY") {
+        Ok(value) => Ok((decode_encryption_key(&value)?, SecretSource::Supplied)),
+        Err(env::VarError::NotUnicode(_)) => Err(AppError::Config(
+            "DATA_ENCRYPTION_KEY must contain valid UTF-8".into(),
+        )),
+        Err(env::VarError::NotPresent) => {
+            let path = directory.join("encryption-key");
+            if path.exists() {
+                let value = fs::read_to_string(&path)?;
+                return Ok((
+                    decode_encryption_key(value.trim()).map_err(|_| {
+                        AppError::Config(format!(
+                            "persisted encryption key is invalid: {}",
+                            path.display()
+                        ))
+                    })?,
+                    SecretSource::Persisted,
+                ));
+            }
+            let mut key = [0_u8; 32];
+            OsRng.fill_bytes(&mut key);
+            persist_secret(&path, &BASE64.encode(key))?;
+            Ok((key, SecretSource::Generated))
+        }
+    }
+}
+
+fn decode_encryption_key(value: &str) -> Result<[u8; 32], AppError> {
+    let decoded = BASE64
+        .decode(value)
+        .map_err(|_| AppError::Config("DATA_ENCRYPTION_KEY must be base64".into()))?;
+    decoded
+        .try_into()
+        .map_err(|_| AppError::Config("DATA_ENCRYPTION_KEY must decode to exactly 32 bytes".into()))
+}
+
+fn persist_secret(path: &FsPath, value: &str) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Config("secret path has no parent directory".into()))?;
+    fs::create_dir_all(parent)?;
+    let mut suffix = [0_u8; 8];
+    OsRng.fill_bytes(&mut suffix);
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("secret"),
+        hex::encode(suffix)
+    ));
+
+    let write_result = (|| -> Result<(), std::io::Error> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(value.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result.map_err(AppError::Io)
 }
 
 #[derive(Clone)]
@@ -1050,6 +1193,11 @@ mod tests {
             encryption_key: [7; 32],
             public_url: "http://localhost".into(),
             build_sha: "test".into(),
+            secret_sources: SecretSources {
+                admin_token: SecretSource::Supplied,
+                encryption_key: SecretSource::Supplied,
+            },
+            secret_directory: dir.clone(),
         };
         AppState::connect(&cfg).await.unwrap()
     }
