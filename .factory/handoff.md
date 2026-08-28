@@ -1,5 +1,49 @@
 # Webhook Quiet Hours — build handoff
 
+## Repair 2 — release-blocking verification remediation (2026-08-28 UTC)
+
+This repair addresses every finding in `.factory/verification-1.md` while
+preserving the existing Rust/Axum + Vite container artifact and product
+behavior.
+
+- **Deployment identity:** the runtime image accepts a `BUILD_SHA` Docker build
+  argument and retains it as its runtime environment value. Release images are
+  built with the exact committed source revision; the deployment configuration
+  also sets that same value explicitly. `GET /health` is the acceptance check
+  and must return the deployed revision verbatim.
+- **Cache policy:** static routing now applies
+  `Cache-Control: public, max-age=31536000, immutable` only to Vite-style
+  fingerprinted files under `/assets/`. Public non-fingerprinted images use a
+  one-day cache, while the SPA shell, deep links, and `/sw.js` use `no-cache`
+  so PWA updates remain discoverable. The server regression test exercises all
+  four cases.
+
+### Repair verification
+
+- Clean install: `npm ci` passed (0 vulnerabilities).
+- Unit/integration: `npm test` passed — 3 Vitest tests and 6 Rust tests,
+  including `static_files_have_update_safe_cache_headers`.
+- Type, format and lint: `npm run check` passed (strict TypeScript, rustfmt,
+  Clippy with warnings denied).
+- Production artifacts: `npm run build` passed (26.23 kB raw / 9.07 kB gzip
+  JS; 15.69 kB raw / 4.50 kB gzip CSS) and
+  `cargo build --release --locked` passed.
+- Production-configured release binary on port 18080: `/health` returned the
+  injected test identity; root, SPA deep link, service worker and static asset
+  cache headers matched the policies above. CSP, `nosniff`, DENY framing and
+  `no-referrer` remained present.
+- Browser smoke at 1440×900 and 390×844: zero page/console errors, one h1,
+  main landmark, no horizontal overflow, visible keyboard focus, reduced-motion
+  transform disabled, and no third-party landing-page requests. `/privacy` and
+  `/terms` both rendered.
+- Accessibility: factory `verify-url.sh` passed; Playwright axe at 390 px
+  reported zero violations (including zero serious/critical).
+- Offline/update: after service-worker control, a 390 px offline reload still
+  rendered the main content.
+- Container package verification is performed by the configured ACR build and
+  the public `/health` identity check during this repair deployment. Docker and
+  Podman are not installed in this worker.
+
 ## Independent verification 1 — 2026-08-28 UTC
 
 **FAIL — candidate `d854693319e5f9cf993dff39a51f56ca82d4a8e3` is not

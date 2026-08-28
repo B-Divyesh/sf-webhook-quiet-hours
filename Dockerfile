@@ -12,6 +12,7 @@ COPY src ./src
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim AS runtime
+ARG BUILD_SHA=unknown
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -27,7 +28,8 @@ ENV PORT=8080 \
     APP_ENV=production \
     DATABASE_URL="sqlite:///app/data/quiet-hours.db?mode=rwc" \
     DIST_DIR=/app/dist \
-    RUST_LOG=webhook_quiet_hours=info,tower_http=info
+    RUST_LOG=webhook_quiet_hours=info,tower_http=info \
+    BUILD_SHA=${BUILD_SHA}
 EXPOSE 8080
 VOLUME ["/app/data"]
 ENTRYPOINT ["/usr/local/bin/webhook-quiet-hours"]

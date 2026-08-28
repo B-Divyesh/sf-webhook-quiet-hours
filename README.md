@@ -73,10 +73,13 @@ Generate a key without storing it in the repository:
 openssl rand -base64 32
 ```
 
-Build and run the production image:
+Build and run the production image. Pass the exact source revision at build
+time so `/health` identifies the image that is actually running:
 
 ```sh
-docker build -t webhook-quiet-hours .
+docker build \
+  --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
+  -t webhook-quiet-hours .
 docker run --rm -p 8080:8080 \
   -e ADMIN_TOKEN='replace-with-a-long-random-token' \
   -e DATA_ENCRYPTION_KEY='replace-with-32-byte-base64' \

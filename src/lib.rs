@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use tower::ServiceBuilder;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor, GovernorLayer,
 };
@@ -218,7 +219,13 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
         .route("/export.csv", get(export_csv))
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(state.clone(), admin_auth));
-    let static_service = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
+    // Vite fingerprints compiled JS/CSS. Keep those bytes for a year while
+    // ensuring the HTML shell and service worker always revalidate, so a
+    // deploy can publish an updated manifest without clients being stranded
+    // on an old shell.
+    let static_service = ServiceBuilder::new()
+        .layer(middleware::from_fn(static_cache_control))
+        .service(ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html"))));
     Router::new()
         .route("/health", get(health))
         .merge(hook)
@@ -231,6 +238,60 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn static_cache_control(req: Request<Body>, next: Next) -> Response {
+    let path = req.uri().path().to_owned();
+    let mut response = next.run(req).await;
+    if response.status().is_success() {
+        // ServeDir's SPA fallback returns index.html for an absent asset too.
+        // Never give that HTML an asset lifetime merely because the requested
+        // pathname looked fingerprinted.
+        let cache_control = if response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|content_type| content_type.starts_with("text/html"))
+        {
+            "no-cache"
+        } else {
+            static_cache_control_value(&path)
+        };
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(cache_control),
+        );
+    }
+    response
+}
+
+fn static_cache_control_value(path: &str) -> &'static str {
+    if is_fingerprinted_asset(path) {
+        "public, max-age=31536000, immutable"
+    } else if path.starts_with("/assets/") {
+        // Public images are not Vite-fingerprinted, but are small and may be
+        // safely refreshed daily when an operator replaces one.
+        "public, max-age=86400"
+    } else {
+        // This covers the SPA shell (including deep links) and /sw.js.
+        "no-cache"
+    }
+}
+
+fn is_fingerprinted_asset(path: &str) -> bool {
+    if !path.starts_with("/assets/") {
+        return false;
+    }
+    let Some(file_name) = path.rsplit('/').next() else {
+        return false;
+    };
+    let Some((stem, _extension)) = file_name.rsplit_once('.') else {
+        return false;
+    };
+    let Some((_name, fingerprint)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    fingerprint.len() >= 8 && fingerprint.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 async fn admin_auth(
@@ -1086,5 +1147,44 @@ mod tests {
                 .unwrap();
         assert_eq!(json[0]["event_type"], "invoice.failed");
         assert_eq!(json[0]["total_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn static_files_have_update_safe_cache_headers() {
+        let state = state().await;
+        let dist = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dist.path().join("assets")).unwrap();
+        std::fs::write(dist.path().join("index.html"), "<main>shell</main>").unwrap();
+        std::fs::write(
+            dist.path().join("sw.js"),
+            "self.addEventListener('fetch', () => {})",
+        )
+        .unwrap();
+        std::fs::write(dist.path().join("assets/index-Ab12Cd34.js"), "export {};").unwrap();
+        std::fs::write(dist.path().join("assets/moon-bloom-480.webp"), "image").unwrap();
+        let app = build_app(state, dist.path().to_path_buf());
+
+        for (uri, expected) in [
+            (
+                "/assets/index-Ab12Cd34.js",
+                "public, max-age=31536000, immutable",
+            ),
+            ("/assets/moon-bloom-480.webp", "public, max-age=86400"),
+            ("/assets/missing-Ab12Cd34.js", "no-cache"),
+            ("/sw.js", "no-cache"),
+            ("/privacy", "no-cache"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL).unwrap(),
+                expected,
+                "{uri}"
+            );
+        }
     }
 }
