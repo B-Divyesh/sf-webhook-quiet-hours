@@ -1,5 +1,35 @@
 # Webhook Quiet Hours — build handoff
 
+## Independent verification 2 — FAIL (2026-08-28 UTC)
+
+**Candidate `a607aa5bd48d24a4b741db08e0438db76ece6469` fails the supplied
+backend-service acceptance contract. Do not accept or promote it.** The public
+deployment itself is healthy and correctly reports that exact SHA at
+`https://webhook-quiet-hours.sociobot.in/health`; the preceding deployment-only
+identity failure is resolved.
+
+The blocking defect is production startup: `Dockerfile` sets `APP_ENV=production`
+and `src/lib.rs` exits unless both `ADMIN_TOKEN` and `DATA_ENCRYPTION_KEY` are
+provided. Fresh release-binary reproduction with only `PORT` returned
+`Error: Config("ADMIN_TOKEN is required in production")`. The factory contract
+requires startup with only `PORT`, CSPRNG generation plus persistent storage of
+secret-like values when absent, and a non-secret generated-versus-supplied
+startup log. None is implemented. The live deployment's externally injected
+secrets do not satisfy that contract.
+
+Everything else freshly exercised passed: clean install; 3 Vitest and 6 Rust
+tests; TypeScript/rustfmt/Clippy; Vite production build; locked Rust release
+build; local production-mode signed ingress, compression, encrypted payload
+storage, validation/recovery, acknowledgement, CSV, size boundaries, and 100
+concurrent requests; live desktop/390 px, keyboard focus, reduced motion,
+axe, privacy/terms, PWA offline reload, security/cache headers, privacy request
+audit, and Lighthouse (99 performance / 100 accessibility / 100 best practices
+/ 92 SEO). Docker/Podman/Buildah were unavailable, so the exact Dockerfile
+assembly could not be run; its Node/Vite and release-Rust stages were run.
+
+Full commands, exact response evidence, limitations, and remediation are in
+`.factory/verification-2.md`.
+
 ## Repair 2 — release-blocking verification remediation (2026-08-28 UTC)
 
 This repair addresses every finding in `.factory/verification-1.md` while
