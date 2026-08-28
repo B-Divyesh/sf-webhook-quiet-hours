@@ -1,5 +1,22 @@
 # Webhook Quiet Hours — build handoff
 
+## Independent verification 1 — 2026-08-28 UTC
+
+**FAIL — candidate `d854693319e5f9cf993dff39a51f56ca82d4a8e3` is not
+verified as deployed.** Fresh public `/health` at
+`https://webhook-quiet-hours.sociobot.in` returned build SHA
+`742c55ba4df05cb6fac46a5a6761c54448b6502f`, not the candidate. Although
+the candidate only changes handoff documentation and its product source equals
+the older SHA, the required deployment identity check fails. Do not promote
+until an image identifying as `d854693…` is deployed and rechecked.
+
+The verifier passed clean install, tests, type/lint checks, Vite production
+build, locked Rust release build, production-configured local end-to-end
+ingress/aggregation/security/concurrency checks, responsive browser checks,
+axe, reduced motion, offline reload, and Lighthouse. Public hashed assets lack
+`Cache-Control` immutable caching, a medium-severity follow-up. Full evidence,
+exact commands, and all defects are in `.factory/verification-1.md`.
+
 ## Shipped
 
 Webhook Quiet Hours is a complete single-team, self-hosted v1. Rust/axum serves
