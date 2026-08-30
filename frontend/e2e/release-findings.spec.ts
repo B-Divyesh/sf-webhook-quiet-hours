@@ -16,11 +16,13 @@ test('@claim:demo-sandbox opens an isolated seeded workspace and resets it', asy
   await expect(page.getByText('Deploy monitor').first()).toBeVisible();
   expect(demoRequests.length).toBeGreaterThan(0);
   expect(demoRequests.every((entry) => !entry.authorization)).toBe(true);
+  const provisionRequests = demoRequests.filter((entry) => entry.url.endsWith('/api/demo/session')).length;
 
   await page.getByRole('button', { name: 'Acknowledge' }).click();
   await expect(page.getByText('High awaiting ack').locator('..').locator('strong')).toHaveText('0');
   await page.reload();
   await expect(page.getByText('High awaiting ack').locator('..').locator('strong')).toHaveText('0');
+  expect(demoRequests.filter((entry) => entry.url.endsWith('/api/demo/session'))).toHaveLength(provisionRequests);
 
   await page.getByRole('button', { name: 'Reset demo' }).click();
   await expect(page.getByText('High awaiting ack').locator('..').locator('strong')).toHaveText('1');

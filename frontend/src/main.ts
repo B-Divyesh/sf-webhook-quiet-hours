@@ -5,6 +5,7 @@ const SLUG = 'webhook-quiet-hours';
 const LICENSE_KEY = `sb_license:${SLUG}`;
 const VERDICT_KEY = `sb_license_verdict:${SLUG}`;
 const DEMO_SESSION_KEY = `demo:${SLUG}:workspace`;
+const DEMO_STATE_KEY = `demo:${SLUG}:state`;
 const BILLING_BASE = import.meta.env.VITE_BILLING_BASE || 'https://api.sociobot.in';
 const PUBLIC_SITE = 'https://webhook-quiet-hours.sociobot.in';
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -14,6 +15,8 @@ type Endpoint = { id: number; slug: string; name: string; signature_required: bo
 type Fingerprint = { fingerprint: string; endpoint_id: number; endpoint_name: string; event_type: string; first_seen: string; last_seen: string; total_count: number; pending_count: number; severity: 'normal' | 'high' | 'ignored'; target_minutes: number; acknowledged_at: string | null; overdue: boolean };
 type Settings = { quiet_start: string; quiet_end: string; utc_offset_minutes: number; digest_minutes: number; retention_days: number; notification_configured: boolean; notification_url: string; escalation_url: string; last_delivery_error: string | null };
 type Model = { summary: Summary; endpoints: Endpoint[]; fingerprints: Fingerprint[]; settings: Settings };
+type FingerprintDetail = { fingerprint: string; event_type: string; payload: unknown; received_at: string; signature_valid: boolean };
+type DemoState = { workspace_id: string; expires_at: string; model: Model; details: Record<string, FingerprintDetail> };
 
 let token = sessionStorage.getItem('qh_admin_token') || '';
 let model: Model | null = null;
@@ -22,6 +25,7 @@ let licenseUnlocked = cachedLicenseValid();
 let statusTimer = 0;
 const demoMode = location.pathname.replace(/\/$/, '') === '/demo';
 let demoWorkspaceId = demoMode ? sessionStorage.getItem(DEMO_SESSION_KEY) || '' : '';
+let demoState: DemoState | null = null;
 
 function cachedLicenseValid(): boolean {
   try {
@@ -55,12 +59,95 @@ async function processLicense(): Promise<void> {
   }
 }
 
+function saveDemoState(): void {
+  if (!demoState) return;
+  demoWorkspaceId = demoState.workspace_id;
+  model = demoState.model;
+  sessionStorage.setItem(DEMO_SESSION_KEY, demoWorkspaceId);
+  sessionStorage.setItem(DEMO_STATE_KEY, JSON.stringify(demoState));
+}
+
+function updateDemoSummary(): void {
+  if (!demoState) return;
+  const fingerprints = demoState.model.fingerprints;
+  const total = fingerprints.reduce((sum, item) => sum + item.total_count, 0);
+  demoState.model.summary = {
+    endpoints: demoState.model.endpoints.length,
+    fingerprints: fingerprints.length,
+    events_today: total,
+    pending: fingerprints.filter((item) => item.severity !== 'ignored').reduce((sum, item) => sum + item.pending_count, 0),
+    compressed: Math.max(0, total - fingerprints.length),
+    high_unacknowledged: fingerprints.filter((item) => item.severity === 'high' && !item.acknowledged_at).length,
+  };
+  saveDemoState();
+}
+
+async function demoApi<T>(path: string, options: RequestInit): Promise<T> {
+  if (!demoState) throw new Error('The sample workspace is no longer available. Reset the demo to start again.');
+  const method = options.method || 'GET';
+  const input = options.body ? JSON.parse(String(options.body)) as Record<string, unknown> : {};
+  if (method === 'GET' && path === '/summary') return demoState.model.summary as T;
+  if (method === 'GET' && path === '/endpoints') return demoState.model.endpoints as T;
+  if (method === 'GET' && path === '/fingerprints') return demoState.model.fingerprints as T;
+  if (method === 'GET' && path === '/settings') return demoState.model.settings as T;
+  const detailMatch = path.match(/^\/fingerprints\/([^/]+)$/);
+  if (method === 'GET' && detailMatch) {
+    const detail = demoState.details[decodeURIComponent(detailMatch[1])];
+    if (!detail) throw new Error('That sample fingerprint no longer exists.');
+    return detail as T;
+  }
+  if (method === 'PATCH' && detailMatch) {
+    const item = demoState.model.fingerprints.find((fingerprint) => fingerprint.fingerprint === decodeURIComponent(detailMatch[1]));
+    if (!item) throw new Error('That sample fingerprint no longer exists.');
+    item.severity = input.severity as Fingerprint['severity'];
+    item.target_minutes = Number(input.target_minutes);
+    item.acknowledged_at = null;
+    updateDemoSummary();
+    return undefined as T;
+  }
+  const ackMatch = path.match(/^\/fingerprints\/([^/]+)\/ack$/);
+  if (method === 'POST' && ackMatch) {
+    const item = demoState.model.fingerprints.find((fingerprint) => fingerprint.fingerprint === decodeURIComponent(ackMatch[1]));
+    if (!item) throw new Error('That sample fingerprint no longer exists.');
+    item.acknowledged_at = new Date().toISOString();
+    item.pending_count = 0;
+    updateDemoSummary();
+    return undefined as T;
+  }
+  const endpointMatch = path.match(/^\/endpoints\/(\d+)$/);
+  if (method === 'DELETE' && endpointMatch) {
+    const endpointId = Number(endpointMatch[1]);
+    demoState.model.endpoints = demoState.model.endpoints.filter((endpoint) => endpoint.id !== endpointId);
+    demoState.model.fingerprints = demoState.model.fingerprints.filter((fingerprint) => fingerprint.endpoint_id !== endpointId);
+    updateDemoSummary();
+    return undefined as T;
+  }
+  if (method === 'PUT' && path === '/settings') {
+    demoState.model.settings = { ...demoState.model.settings, ...input, notification_url: '', notification_configured: false } as Settings;
+    saveDemoState();
+    return undefined as T;
+  }
+  if (method === 'POST' && path === '/digest/send') {
+    let sent = 0;
+    demoState.model.fingerprints.forEach((fingerprint) => {
+      if (fingerprint.severity === 'normal' && fingerprint.pending_count > 0) {
+        fingerprint.pending_count = 0;
+        sent += 1;
+      }
+    });
+    updateDemoSummary();
+    return { sent } as T;
+  }
+  throw new Error('That action is unavailable in the sample workspace.');
+}
+
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (demoMode) return demoApi<T>(path, options);
   if (!navigator.onLine) throw new Error('You appear to be offline. Reconnect to reach the self-hosted receiver.');
-  const apiPath = demoMode ? `/api/demo/${demoWorkspaceId}${path}` : `/api${path}`;
+  const apiPath = `/api${path}`;
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
-  if (!demoMode) headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Authorization', `Bearer ${token}`);
   const response = await fetch(apiPath, {
     ...options,
     headers,
@@ -128,34 +215,40 @@ function renderLoading(): void {
 }
 
 async function startDemo(forceNew = false): Promise<void> {
-  const reusedWorkspace = Boolean(demoWorkspaceId) && !forceNew;
   if (forceNew) {
     demoWorkspaceId = '';
+    demoState = null;
     sessionStorage.removeItem(DEMO_SESSION_KEY);
+    sessionStorage.removeItem(DEMO_STATE_KEY);
   }
-  if (!demoWorkspaceId) {
+  if (!demoState && !forceNew) {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(DEMO_STATE_KEY) || 'null') as DemoState | null;
+      if (stored && Date.parse(stored.expires_at) > Date.now()) demoState = stored;
+    } catch { /* create a clean workspace */ }
+  }
+  if (!demoState) {
     renderLoading();
     const response = await fetch('/api/demo/session', { method: 'POST' });
     if (!response.ok) {
       renderDemoError('The sample workspace could not start. Reload this page to try again.');
       return;
     }
-    const session = await response.json() as { workspace_id: string };
-    demoWorkspaceId = session.workspace_id;
-    sessionStorage.setItem(DEMO_SESSION_KEY, demoWorkspaceId);
+    const session = await response.json() as DemoState & { summary: Summary; endpoints: Endpoint[]; fingerprints: Fingerprint[]; settings: Settings };
+    demoState = {
+      workspace_id: session.workspace_id,
+      expires_at: session.expires_at,
+      model: { summary: session.summary, endpoints: session.endpoints, fingerprints: session.fingerprints, settings: session.settings },
+      details: session.details,
+    };
+    saveDemoState();
   }
-  await loadDashboard(reusedWorkspace);
+  await loadDashboard();
 }
 
 async function resetDemo(): Promise<void> {
-  if (!demoWorkspaceId) return;
-  const response = await fetch(`/api/demo/${demoWorkspaceId}/reset`, { method: 'POST' });
-  if (!response.ok) {
-    await startDemo(true);
-    return;
-  }
   activeView = 'observations';
-  await loadDashboard();
+  await startDemo(true);
   showStatus('Sample data reset.');
 }
 
@@ -164,6 +257,7 @@ async function leaveDemo(): Promise<void> {
     await fetch(`/api/demo/${demoWorkspaceId}/session`, { method: 'DELETE' }).catch(() => undefined);
   }
   sessionStorage.removeItem(DEMO_SESSION_KEY);
+  sessionStorage.removeItem(DEMO_STATE_KEY);
   location.assign('/');
 }
 
@@ -333,9 +427,19 @@ async function sendDigest(): Promise<void> {
 }
 
 async function exportCsv(): Promise<void> {
-  const path = demoMode ? `/api/demo/${demoWorkspaceId}/export.csv` : '/api/export.csv';
-  const headers = demoMode ? undefined : { Authorization: `Bearer ${token}` };
-  try { const response = await fetch(path, { headers }); if (!response.ok) throw new Error('Export failed.'); const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = demoMode ? 'webhook-fingerprints-demo.csv' : 'webhook-fingerprints.csv'; link.click(); URL.revokeObjectURL(url); showStatus('Fingerprint CSV exported.'); } catch (error) { showStatus(message(error), 'error'); }
+  try {
+    let blob: Blob;
+    if (demoMode && model) {
+      const quote = (value: string | number | null) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+      const rows = model.fingerprints.map((item) => [item.endpoint_name, item.fingerprint, item.event_type, item.severity, item.total_count, item.pending_count, item.first_seen, item.last_seen, item.acknowledged_at].map(quote).join(','));
+      blob = new Blob([`alias,fingerprint,event_type,severity,total_count,pending_count,first_seen,last_seen,acknowledged_at\n${rows.join('\n')}\n`], { type: 'text/csv;charset=utf-8' });
+    } else {
+      const response = await fetch('/api/export.csv', { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error('Export failed.');
+      blob = await response.blob();
+    }
+    const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = demoMode ? 'webhook-fingerprints-demo.csv' : 'webhook-fingerprints.csv'; link.click(); URL.revokeObjectURL(url); showStatus('Fingerprint CSV exported.');
+  } catch (error) { showStatus(message(error), 'error'); }
 }
 
 function renderLegal(kind: 'privacy' | 'terms'): void {

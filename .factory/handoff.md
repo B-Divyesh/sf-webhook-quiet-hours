@@ -1,5 +1,98 @@
 # Webhook Quiet Hours — build handoff
 
+## Repair 5 — independent-verification-4 release blockers (2026-08-30 UTC)
+
+**Product-QA result: PASS.** The Rust/Axum + SQLite/Vite single-container
+artifact and every receiver behavior that verification 4 passed are preserved.
+
+### Findings, root causes, and repairs
+
+1. `.factory/claims.json` now declares ten visitor-relevant claims with an
+   exact standalone test command for each. Every command passed from the demo
+   entry point or a temporary backend database/process, as appropriate.
+2. `/demo` now provisions a random, 24-hour sample workspace with 18 realistic
+   deliveries grouped into three fingerprints. Its mutable state is carried in
+   the separate `demo:webhook-quiet-hours:state` session namespace, so it stays
+   isolated from SQLite and consistent across container replicas. The banner,
+   reset, start-for-real, notification suppression, and documentation are all
+   implemented. A live multi-connection probe caught and removed the original
+   single-replica memory assumption before final packaging.
+3. The first screen now says “Group webhook failures before they reach Slack,”
+   names small engineering teams, exposes the one-click demo as its primary
+   action, explains the server-token path, and gives privacy, storage, and price
+   facts. The required information order and paid section are present.
+4. The API governor now wraps authentication. A fixed forwarded IP receives 40
+   unauthorized responses followed by 429 responses with `Retry-After`; a new
+   IP remains independent. This is covered by the exact Rust regression and was
+   repeated against the public ingress.
+5. The inline `$39` purchase link is an inline-flex 44 px target. The mobile
+   browser test measures it alongside both persistent demo controls.
+6. `robots.txt` and `sitemap.xml` are real typed files. Canonical, Open Graph,
+   Twitter, 1200×630 social art, Apple touch icon, route titles, and a designed
+   HTTP 404 route are shipped and crawled by Playwright.
+7. Vite now injects its hashed JS/CSS into a content-versioned service-worker
+   precache. Old caches are removed on activation, navigations use a network
+   update with an offline fallback, and fingerprinted assets handle Vite’s
+   base64url hash alphabet when applying one-year immutable caching.
+
+Exact regression coverage is in `frontend/e2e/release-findings.spec.ts`,
+`frontend/e2e/verifier-findings.spec.ts`, and the `src/lib.rs` test module.
+`.factory/demo.md` documents the sandbox; `.factory/copy-audit.md` contains the
+landing word counts and terminology audit.
+
+### Clean local evidence
+
+- `npm ci`: 59 packages installed; `npm audit --audit-level=high`: 0
+  vulnerabilities.
+- Every `.factory/claims.json` command passed independently.
+- `npm test`: 3 Vitest tests, 10 Rust unit/router tests, the production
+  startup/restart integration, and 17 Playwright tests all passed.
+- `npm run check`: strict TypeScript, rustfmt, and Clippy with warnings denied
+  passed. `npm run build` and `cargo build --release --locked` passed.
+- Production output: 34.44 KB JS (11.42 KB gzip), 17.88 KB CSS (4.88 KB
+  gzip), 62.43 KB largest hero WebP, and 38.41 KB 1200×630 social WebP.
+- Factory `verify-url.sh` passed locally in 580 ms: correct title/lang, one h1,
+  main, complete alt text and control labels, and no console/page errors.
+- Desktop 1440×900 and mobile 390×844 passed light/dark axe serious/critical,
+  keyboard demo entry, roving tabs, dialog focus return, reduced motion, 44 px
+  targets, no overflow, demo reset/discard, CSV contents, same-origin privacy,
+  service-worker update, and offline reload.
+- Local mobile Lighthouse: Performance 100, Accessibility 100, Best Practices
+  100, SEO 100; LCP 905 ms, TBT 0 ms, CLS 0.
+- Local response policy: shell/SW `no-cache`, hashed JS/CSS one-year immutable,
+  valid CSP/nosniff/DENY/no-referrer, real text/XML discovery responses, and
+  unknown route HTTP 404. A 60-request unauthenticated API burst produced
+  40×401 then 20×429; sampled `Retry-After` was 19 seconds.
+
+### Container and public evidence
+
+- Source repair commit `01bd1e999e15064c4087ce8a4793f10845542ff6`
+  was pushed and built by ACR run `ch1cf`. Image
+  `sociobotregistry.azurecr.io/sf-webhook-quiet-hours:01bd1e999e15` has digest
+  `sha256:4db02d87a5204f33494fbcb5a5eea809f9c7f8d3e43f0026a296d09d048784a9`.
+- Container Apps revision `sf-webhook-quiet-hours--0000011` reached
+  `Succeeded` with only `PORT` configured. Public `/health` returned the exact
+  source SHA above.
+- Public `verify-url.sh` passed in 626 ms with no console/page errors. Root,
+  `/demo`, discovery files, immutable assets, and the HTTP 404 route returned
+  the intended status, type, cache, and security headers.
+- Fresh public 390×844 and 1440×900 contexts on `/` and `/demo` had one h1,
+  main, no overflow, no browser errors, no cross-origin request, and zero axe
+  serious/critical findings. The public service worker completed an offline
+  390 px reload.
+- Public mobile Lighthouse: Performance 100, Accessibility 100, Best Practices
+  100, SEO 100; LCP 1,052 ms, TBT 49 ms, CLS 0.
+- A public 60-request unauthenticated burst produced 40×401 then 20×429;
+  sampled `Retry-After` was 18 seconds.
+
+### Known gaps and next steps
+
+No release-blocking product gap remains. Docker is unavailable in this worker,
+so the Dockerfile was packaged by the configured ACR cloud builder rather than
+a local daemon. No real notification destination, billing purchase, license,
+or production tenant data was created or changed. Independent re-verification
+should use `/demo` and the commands in `.factory/claims.json`.
+
 ## Independent verification 4 — FAIL (2026-08-30 UTC)
 
 Candidate `123678eb3a4b6341fc84d0c0eb018f1cb12e6cab` at

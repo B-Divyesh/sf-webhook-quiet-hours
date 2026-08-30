@@ -4,7 +4,7 @@
     "claim": "Try realistic sample data without an account or changes to the real receiver.",
     "where": "landing primary action, demo banner, README",
     "test": "npx playwright test --grep @claim:demo-sandbox",
-    "sandbox": "fresh browser context; create a server-side demo workspace; mutate and reset it; verify the authenticated real summary remains empty"
+    "sandbox": "fresh browser context; create a server-provisioned demo workspace in the demo session namespace; mutate and reset it; verify the authenticated real summary remains empty"
   },
   {
     "id": "repeat-compression",

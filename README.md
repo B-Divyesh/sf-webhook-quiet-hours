@@ -13,9 +13,10 @@ general automation platform.
 ## Try the sample workspace
 
 Open `/demo` or choose **Try it with sample data** on the first screen. The
-server creates a random in-memory workspace with 18 deliveries grouped into
-three fingerprints. It needs no account or admin token. Demo changes never
-touch the real SQLite tenant, and the workspace expires after 24 hours.
+server provisions a random temporary workspace with 18 deliveries grouped into
+three fingerprints. It needs no account or admin token. The browser carries
+demo changes in a separate session namespace, so they never touch the real
+SQLite tenant. The workspace expires after 24 hours.
 
 Use **Reset demo** to restore the sample. Use **Start for real** to delete the
 temporary workspace and return to the server login. See

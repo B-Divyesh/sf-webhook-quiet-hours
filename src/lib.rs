@@ -1001,6 +1001,11 @@ struct DemoWorkspace {
 struct DemoSession {
     workspace_id: String,
     expires_at: String,
+    summary: Summary,
+    endpoints: Vec<EndpointView>,
+    fingerprints: Vec<FingerprintView>,
+    details: HashMap<String, FingerprintDetail>,
+    settings: SettingsView,
 }
 
 fn seeded_demo_workspace() -> DemoWorkspace {
@@ -1103,15 +1108,21 @@ async fn create_demo_session(State(state): State<AppState>) -> Json<DemoSession>
         .collect();
     let workspace = seeded_demo_workspace();
     let expires_at = (workspace.created_at + ChronoDuration::hours(24)).to_rfc3339();
+    let session = DemoSession {
+        workspace_id: workspace_id.clone(),
+        expires_at,
+        summary: demo_summary_value(&workspace),
+        endpoints: workspace.endpoints.clone(),
+        fingerprints: workspace.fingerprints.clone(),
+        details: workspace.details.clone(),
+        settings: workspace.settings.clone(),
+    };
     state
         .demos
         .write()
         .await
         .insert(workspace_id.clone(), workspace);
-    Json(DemoSession {
-        workspace_id,
-        expires_at,
-    })
+    Json(session)
 }
 
 async fn discard_demo_session(
@@ -1137,11 +1148,17 @@ async fn reset_demo_session(
     }
     let seeded = seeded_demo_workspace();
     let expires_at = (seeded.created_at + ChronoDuration::hours(24)).to_rfc3339();
-    demos.insert(workspace.clone(), seeded);
-    Ok(Json(DemoSession {
-        workspace_id: workspace,
+    let session = DemoSession {
+        workspace_id: workspace.clone(),
         expires_at,
-    }))
+        summary: demo_summary_value(&seeded),
+        endpoints: seeded.endpoints.clone(),
+        fingerprints: seeded.fingerprints.clone(),
+        details: seeded.details.clone(),
+        settings: seeded.settings.clone(),
+    };
+    demos.insert(workspace.clone(), seeded);
+    Ok(Json(session))
 }
 
 fn demo_summary_value(workspace: &DemoWorkspace) -> Summary {
