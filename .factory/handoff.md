@@ -2,9 +2,9 @@
 
 ## Repair 4 — verifier accessibility and interaction remediation (2026-08-30 UTC)
 
-**Local product-QA result: PASS. Deployment evidence is recorded below after the
-factory container deployment completes.** This repair preserves the Rust/Axum +
-SQLite/Vite single-container artifact and all verified webhook behavior.
+**Product-QA and deployment result: PASS.** This repair preserves the
+Rust/Axum + SQLite/Vite single-container artifact and all verified webhook
+behavior. It supersedes the independent-verification-3 failure below.
 
 ### Exact reproduction and root causes
 
@@ -63,6 +63,27 @@ SQLite/Vite single-container artifact and all verified webhook behavior.
 - `/opt/fleet/lib/verify-url.sh http://127.0.0.1:18080` passed: HTTP 200,
   title, `lang=en`, one h1, main landmark, complete image alt text, labelled
   controls, and no console/page errors (576 ms local load).
+
+### Container deployment and public evidence
+
+- Commit `37f2ea60abfba027d5598ead4cae75abfeace399` was pushed to `main` and
+  deployed through factory ACR build run `ch1ab`. The successful image is
+  `sociobotregistry.azurecr.io/sf-webhook-quiet-hours:37f2ea60abfb`, digest
+  `sha256:1bf4512fac08645743a04684e8360d1dbbf636668810f332fffb7083f89f3d8b`.
+- Container Apps revision `sf-webhook-quiet-hours--0000009` reached
+  `Succeeded` with its only configured runtime environment name `PORT`.
+- Public `GET /health` returned HTTP 200 and exact identity
+  `{"build_sha":"37f2ea60abfba027d5598ead4cae75abfeace399","status":"ok"}`.
+- Public `verify-url.sh` passed in 787 ms with no console/page errors, title,
+  `lang=en`, exactly one h1, main, complete image alt text, and labelled
+  controls. The public shell and `/sw.js` are `no-cache`; `nosniff`, DENY
+  framing, no-referrer, and the self-only/billing-API CSP are present.
+- A fresh 390 px public browser context received no third-party requests or
+  browser errors. Its service worker controlled the page, completed
+  `registration.update()`, and rendered the landing h1 after an offline
+  reload. The authenticated color/keyboard/touch audit was run against the
+  disposable real release binary because the public generated admin token is
+  intentionally unavailable outside the container volume.
 
 ## Independent verification 3 — FAIL (2026-08-28 UTC)
 
