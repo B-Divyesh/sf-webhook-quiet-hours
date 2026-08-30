@@ -116,8 +116,10 @@ curl --fail-with-body -X POST "$RECEIVER_URL" \
 ```
 
 Create aliases separately for providers with different secrets. The receiver
-accepts payloads up to 256 KB and applies a global 100 requests/second rate with
-a 200-request burst. Configure providers to retry non-2xx responses.
+accepts payloads up to 256 KB and applies a 100 requests/second rate with a
+200-request burst per source IP. Dashboard API calls are limited to 20 requests
+per second with a 40-request burst and return `429` plus `Retry-After` when
+exceeded. Configure providers to retry non-2xx responses.
 
 ## Notification behavior
 

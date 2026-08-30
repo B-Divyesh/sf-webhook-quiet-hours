@@ -8,6 +8,7 @@
   --moss: #31543d;
   --moss-hover: #243f2e;
   --lichen: #71865f;
+  --paid-eyebrow: #b5cc9e;
   --amber: #8a5715;
   --berry: #963835;
   --sky: #245e70;
@@ -29,6 +30,7 @@
   --moss: #a8c393;
   --moss-hover: #c2d5b3;
   --lichen: #9bb487;
+  --paid-eyebrow: #31543d;
   --amber: #e0aa61;
   --berry: #ec8580;
   --sky: #8ac1d1;
@@ -56,7 +58,7 @@ code { overflow-wrap: anywhere; }
 .skip-link { position: fixed; z-index: 100; left: 16px; top: -80px; padding: 12px 18px; background: var(--ink); color: var(--paper); }
 .skip-link:focus-visible { top: 16px; }
 .site-header { position: relative; z-index: 2; height: 76px; max-width: 1440px; margin: auto; padding: 0 clamp(20px, 5vw, 72px); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
-.brand { color: var(--ink); font-family: Georgia, serif; font-weight: 700; text-decoration: none; letter-spacing: -.01em; }
+.brand { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; color: var(--ink); font-family: Georgia, serif; font-weight: 700; text-decoration: none; letter-spacing: -.01em; }
 .brand span { color: var(--berry); margin-right: 7px; }
 .icon-button { width: 44px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); font-size: 1.25rem; }
 .landing { max-width: 1440px; margin: auto; }
@@ -93,6 +95,7 @@ textarea { resize: vertical; }
 footer { position: relative; max-width: 1440px; margin: auto; padding: 28px clamp(20px, 5vw, 72px) calc(28px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; display: flex; justify-content: space-between; gap: 20px; }
 footer p { margin: 0; }
 footer nav { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px 22px; }
+footer nav a { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; }
 .loading-view { min-height: 70vh; max-width: 1200px; margin: auto; padding: 12vh 5vw; }
 .loading-view h1 { font-size: clamp(2.4rem, 5vw, 4rem); }
 .loading-lines { margin-top: 48px; display: grid; gap: 16px; max-width: 720px; }
@@ -142,7 +145,7 @@ pre { max-height: 360px; margin: 0; padding: 17px; overflow: auto; background: v
 .empty-inline { padding: 28px 8px; color: var(--muted); }
 .upgrade-note { padding: 14px 18px; background: color-mix(in srgb, var(--amber) 12%, transparent); border-left: 3px solid var(--amber); }
 .paid-card { margin-top: 50px; padding: 28px; display: flex; justify-content: space-between; align-items: center; gap: 30px; background: var(--ink); color: var(--paper); }
-.paid-card .eyebrow { color: var(--lichen); }.paid-card h3 { font-size: 1.8rem; }.paid-card p { margin: 8px 0 0; color: color-mix(in srgb, var(--paper) 80%, transparent); }.license-actions { display: flex; gap: 10px; flex-shrink: 0; }.link-button { display: inline-flex; align-items: center; text-decoration: none; }.license-active { color: var(--lichen); font-weight: 800; white-space: nowrap; }
+.paid-card .eyebrow { color: var(--paid-eyebrow); }.paid-card h3 { font-size: 1.8rem; }.paid-card p { margin: 8px 0 0; color: color-mix(in srgb, var(--paper) 80%, transparent); }.paid-card .secondary { background: var(--paper); border-color: var(--paper); color: var(--ink); }.paid-card .secondary:hover { background: var(--paper-deep); border-color: var(--paper-deep); }.license-actions { display: flex; gap: 10px; flex-shrink: 0; }.link-button { display: inline-flex; align-items: center; text-decoration: none; }.license-active { color: var(--paid-eyebrow); font-weight: 800; white-space: nowrap; }
 .settings-form { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 fieldset { min-width: 0; padding: 22px; border: 1px solid var(--line); display: grid; align-content: start; gap: 16px; }
 legend { padding: 0 7px; font: 700 1.25rem Georgia, serif; }.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }.wide { grid-column: 1 / -1; } label span { font-weight: 400; color: var(--muted); }.form-actions { display: flex; justify-content: flex-end; }

@@ -70,7 +70,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 function shell(content: string): string {
-  return `<header class="site-header"><a class="brand" href="/" aria-label="Webhook Quiet Hours home"><span aria-hidden="true">✦</span> Webhook Quiet Hours</a><button id="theme-toggle" class="icon-button" type="button" aria-label="Toggle color theme"><span aria-hidden="true">◐</span></button></header>${content}<footer><p>Self-hosted. No telemetry. Payloads encrypted at rest.</p><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><span>Original AI-generated botanical plate</span></nav></footer><div id="live-status" class="toast" role="status" aria-live="polite"></div>`;
+  return `<header class="site-header"><a class="brand" href="/" aria-label="Webhook Quiet Hours home"><span aria-hidden="true">✦</span> Webhook Quiet Hours</a><button id="theme-toggle" class="icon-button" type="button" aria-label="Toggle color theme"><span aria-hidden="true">◐</span></button></header>${content}<footer><p>Self-hosted. No telemetry. Payloads encrypted at rest.</p><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><span>Original AI-generated botanical plate</span></nav></footer>`;
 }
 
 function setupTheme(): void {
@@ -113,18 +113,29 @@ async function loadDashboard(): Promise<void> {
   } catch (error) { renderLanding(error instanceof Error ? error.message : 'Could not reach the receiver.'); }
 }
 
-function renderDashboard(): void {
+function renderDashboard(focusActiveTab = false): void {
   if (!model) return;
-  const tab = (id: typeof activeView, label: string) => `<button class="tab ${activeView === id ? 'active' : ''}" role="tab" aria-selected="${activeView === id}" data-view="${id}" type="button">${label}</button>`;
-  app.innerHTML = shell(`<main id="main" class="app-shell"><div class="app-heading"><div><p class="eyebrow">Live field log</p><h1>Webhook observations</h1></div><div class="connection"><span class="pulse" aria-hidden="true"></span>Receiver online</div></div><section class="summary-strip" aria-label="Current summary"><article><span>Observed today</span><strong>${model.summary.events_today}</strong></article><article><span>Fingerprints</span><strong>${model.summary.fingerprints}</strong></article><article><span>Repeats compressed</span><strong>${model.summary.compressed}</strong></article><article class="${model.summary.high_unacknowledged ? 'attention' : ''}"><span>High awaiting ack</span><strong>${model.summary.high_unacknowledged}</strong></article></section><div class="workbench"><nav class="tabs" role="tablist" aria-label="Field log sections">${tab('observations', 'Observations')}${tab('aliases', `Aliases · ${model.endpoints.length}`)}${tab('settings', 'Quiet rules')}</nav><section id="panel" class="panel" role="tabpanel"></section></div></main>`);
+  const tab = (id: typeof activeView, label: string) => `<button id="tab-${id}" class="tab ${activeView === id ? 'active' : ''}" role="tab" aria-selected="${activeView === id}" aria-controls="panel" tabindex="${activeView === id ? '0' : '-1'}" data-view="${id}" type="button">${label}</button>`;
+  app.innerHTML = shell(`<main id="main" class="app-shell"><div class="app-heading"><div><p class="eyebrow">Live field log</p><h1>Webhook observations</h1></div><div class="connection"><span class="pulse" aria-hidden="true"></span>Receiver online</div></div><section class="summary-strip" aria-label="Current summary"><article><span>Observed today</span><strong>${model.summary.events_today}</strong></article><article><span>Fingerprints</span><strong>${model.summary.fingerprints}</strong></article><article><span>Repeats compressed</span><strong>${model.summary.compressed}</strong></article><article class="${model.summary.high_unacknowledged ? 'attention' : ''}"><span>High awaiting ack</span><strong>${model.summary.high_unacknowledged}</strong></article></section><div class="workbench"><nav class="tabs" role="tablist" aria-label="Field log sections">${tab('observations', 'Observations')}${tab('aliases', `Aliases · ${model.endpoints.length}`)}${tab('settings', 'Quiet rules')}</nav><section id="panel" class="panel" role="tabpanel" aria-labelledby="tab-${activeView}" tabindex="-1"></section></div></main>`);
   setupTheme(); setupTabs(); renderActivePanel();
-  document.querySelector<HTMLButtonElement>('.tab.active')?.focus({ preventScroll: true });
+  if (focusActiveTab) document.querySelector<HTMLButtonElement>('.tab.active')?.focus({ preventScroll: true });
 }
 
 function setupTabs(): void {
-  document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((button) => button.addEventListener('click', () => {
-    activeView = button.dataset.view as typeof activeView; renderDashboard();
-  }));
+  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-view]'));
+  const selectTab = (view: typeof activeView) => { activeView = view; renderDashboard(true); };
+  tabs.forEach((button, index) => {
+    button.addEventListener('click', () => selectTab(button.dataset.view as typeof activeView));
+    button.addEventListener('keydown', (event) => {
+      const last = tabs.length - 1;
+      const next = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? (index + last) % tabs.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? last : -1;
+      if (next < 0) return;
+      event.preventDefault();
+      selectTab(tabs[next].dataset.view as typeof activeView);
+    });
+  });
 }
 
 function renderActivePanel(): void {

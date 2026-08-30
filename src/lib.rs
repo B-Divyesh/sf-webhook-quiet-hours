@@ -30,7 +30,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::ServiceBuilder;
 use tower_governor::{
-    governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor, GovernorLayer,
+    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorError,
+    GovernorLayer,
 };
 use tower_http::{
     compression::CompressionLayer,
@@ -334,15 +335,26 @@ impl IntoResponse for AppError {
 }
 
 pub fn build_app(state: AppState, dist: PathBuf) -> Router {
-    // Bound accidental/hostile floods before parsing or encrypting request bodies. A generous
-    // global allowance is predictable behind a self-hosted reverse proxy.
+    // Bound accidental/hostile floods before parsing or encrypting request bodies. SmartIp uses
+    // the first X-Forwarded-For hop supplied by the factory ingress, then falls back to the
+    // direct peer for local deployments.
     let hook_limit = Arc::new(
         GovernorConfigBuilder::default()
-            .key_extractor(GlobalKeyExtractor)
+            .key_extractor(SmartIpKeyExtractor)
             .per_millisecond(10)
             .burst_size(200)
+            .error_handler(rate_limit_response)
             .finish()
             .expect("valid webhook rate limit"),
+    );
+    let api_limit = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(SmartIpKeyExtractor)
+            .per_second(20)
+            .burst_size(40)
+            .error_handler(rate_limit_response)
+            .finish()
+            .expect("valid API rate limit"),
     );
     let hook = Router::new()
         .route("/hooks/:slug", post(receive_webhook))
@@ -361,6 +373,7 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
         .route("/digest/send", post(send_digest_now))
         .route("/export.csv", get(export_csv))
         .fallback(api_not_found)
+        .layer(GovernorLayer { config: api_limit })
         .layer(middleware::from_fn_with_state(state.clone(), admin_auth));
     // Vite fingerprints compiled JS/CSS. Keep those bytes for a year while
     // ensuring the HTML shell and service worker always revalidate, so a
@@ -381,6 +394,23 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+fn rate_limit_response(error: GovernorError) -> Response {
+    let retry_after = match error {
+        GovernorError::TooManyRequests { wait_time, .. } => wait_time.max(1),
+        _ => 1,
+    };
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({"error":"Too many requests. Try again shortly."})),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        HeaderValue::from_str(&retry_after.to_string()).expect("valid Retry-After value"),
+    );
+    response
 }
 
 async fn static_cache_control(req: Request<Body>, next: Next) -> Response {
@@ -1259,6 +1289,7 @@ mod tests {
             .uri("/api/endpoints")
             .header(header::AUTHORIZATION, "Bearer test-token")
             .header(header::CONTENT_TYPE, "application/json")
+            .header("x-forwarded-for", "203.0.113.10")
             .body(Body::from(r#"{"name":"Billing","require_signature":true}"#))
             .unwrap();
         let created = app.clone().oneshot(create).await.unwrap();
@@ -1280,6 +1311,7 @@ mod tests {
             .method("POST")
             .uri(hook_path)
             .header("x-webhook-signature", signature)
+            .header("x-forwarded-for", "203.0.113.10")
             .body(Body::from(body.as_slice()))
             .unwrap();
         let accepted = app.clone().oneshot(receive).await.unwrap();
@@ -1287,6 +1319,7 @@ mod tests {
         let list = Request::builder()
             .uri("/api/fingerprints")
             .header(header::AUTHORIZATION, "Bearer test-token")
+            .header("x-forwarded-for", "203.0.113.10")
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(list).await.unwrap();
@@ -1334,5 +1367,47 @@ mod tests {
                 "{uri}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn api_rate_limit_uses_first_forwarded_hop_and_sets_retry_after() {
+        let state = state().await;
+        let dist = tempfile::tempdir().unwrap();
+        let app = build_app(state, dist.path().to_path_buf());
+        let request_for = |ip: &str| {
+            Request::builder()
+                .uri("/api/summary")
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .header("x-forwarded-for", ip)
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let mut limited = None;
+        for _ in 0..100 {
+            let response = app
+                .clone()
+                .oneshot(request_for("203.0.113.77"))
+                .await
+                .unwrap();
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(response);
+                break;
+            }
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let limited = limited.expect("one client should be rate limited after its burst");
+        assert!(limited.headers().contains_key(header::RETRY_AFTER));
+        assert_ne!(
+            limited.headers().get(header::RETRY_AFTER).unwrap(),
+            "0",
+            "Retry-After must ask clients to wait at least one second"
+        );
+
+        let other_client = app
+            .oneshot(request_for("203.0.113.78, 10.0.0.1"))
+            .await
+            .unwrap();
+        assert_eq!(other_client.status(), StatusCode::OK);
     }
 }

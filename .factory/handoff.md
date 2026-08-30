@@ -1,5 +1,69 @@
 # Webhook Quiet Hours — build handoff
 
+## Repair 4 — verifier accessibility and interaction remediation (2026-08-30 UTC)
+
+**Local product-QA result: PASS. Deployment evidence is recorded below after the
+factory container deployment completes.** This repair preserves the Rust/Axum +
+SQLite/Vite single-container artifact and all verified webhook behavior.
+
+### Exact reproduction and root causes
+
+- The verifier's authenticated Aliases failure reproduced before the change on a
+  390 px browser: axe reported the paid-card eyebrow at **4.19:1**
+  (`#71865F` on `#172019`) and **Restore license** at **1.07:1**
+  (`#F4F0E5` on `#FBF8EF`). The same source also reproduced at 1440 px.
+- ArrowRight on the selected Observations tab left both focus and
+  `aria-selected` unchanged because the tab buttons had no key handler or
+  roving tabindex.
+- A real 300 ms check after a mocked no-op manual digest found an empty
+  `#live-status`: dashboard rendering replaced the live region immediately
+  after `showStatus`.
+- At 390 px the brand, Privacy, and Terms link boxes measured 23.31 px,
+  21.06 px, and 21.06 px high.
+
+### Repair and regression coverage
+
+- The live region is now a stable `aria-atomic` sibling of the render root, so
+  acknowledgement, classification, alias deletion, quiet-rule save, and
+  manual-digest messages survive dashboard refreshes.
+- Tabs now implement active roving tabindex plus ArrowLeft/ArrowRight,
+  ArrowUp/ArrowDown, Home, and End. They expose `aria-controls` and the panel
+  exposes the matching `aria-labelledby` relationship.
+- The paid card supplies theme-specific AA eyebrow colors and an explicit
+  ink-on-paper Restore control. The persistent brand and legal links have
+  44×44 px minimum hit areas.
+- `frontend/e2e/verifier-findings.spec.ts` is run by `npm test` with pinned
+  Playwright 1.58.2 and axe-core. It audits the authenticated Aliases panel at
+  390×844 and 1440×900 in light and dark themes, exercises roving tab keys,
+  proves the same live-region node and message persist after every reported
+  action, and measures all three mobile hit areas.
+- The release audit also corrected two backend-service contract gaps: every
+  authenticated API route now uses the first `X-Forwarded-For` hop for a
+  20 req/s, burst-40 limiter with a `429` and non-zero `Retry-After`; the
+  existing hook allowance remains 100 req/s, burst 200 per source IP. Rust's
+  Docker builder is now `rust:1-slim` and accepts `BUILD_SHA=dev` locally.
+  `api_rate_limit_uses_first_forwarded_hop_and_sets_retry_after` is the exact
+  regression test.
+
+### Local verification evidence
+
+- Fresh `npm ci` installed 59 packages and `npm audit --audit-level=high`
+  reported 0 vulnerabilities.
+- `npm test`: passed — 3 Vitest tests, 7 Rust unit/router tests, the
+  process-level production startup/restart integration, and 5 Playwright
+  regressions.
+- `npm run check`, `npm run build`, and `cargo build --release --locked` all
+  passed. The production bundle is 26.59 KB raw / 9.22 KB gzip JavaScript and
+  16.08 KB raw / 4.56 KB gzip CSS.
+- A disposable real release binary with a SQLite database was authenticated,
+  seeded with an alias, and audited at 390×844 and 1440×900. Axe returned no
+  color-contrast violations, ArrowRight moved Aliases to Quiet rules, all
+  persistent link targets were at least 44 px tall, and there were no page or
+  console errors.
+- `/opt/fleet/lib/verify-url.sh http://127.0.0.1:18080` passed: HTTP 200,
+  title, `lang=en`, one h1, main landmark, complete image alt text, labelled
+  controls, and no console/page errors (576 ms local load).
+
 ## Independent verification 3 — FAIL (2026-08-28 UTC)
 
 **Latest acceptance result: FAIL. Do not accept or promote candidate

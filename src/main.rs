@@ -31,9 +31,12 @@ async fn main() -> anyhowless::Result<()> {
     let app = build_app(state, dist);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await?;
     info!(port, "webhook quiet hours listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

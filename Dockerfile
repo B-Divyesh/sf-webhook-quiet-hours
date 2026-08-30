@@ -4,7 +4,7 @@ COPY package.json package-lock.json ./
 COPY frontend ./frontend
 RUN npm ci && npm run build
 
-FROM rust:1.89-bookworm AS rust-builder
+FROM rust:1-slim AS rust-builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY migrations ./migrations
@@ -12,7 +12,7 @@ COPY src ./src
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim AS runtime
-ARG BUILD_SHA=unknown
+ARG BUILD_SHA=dev
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
