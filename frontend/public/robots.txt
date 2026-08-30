@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://webhook-quiet-hours.sociobot.in/sitemap.xml

@@ -156,7 +156,8 @@ test('@regression:status-survives-dashboard-rerenders for every reported action'
 test('@regression:mobile-persistent-links-have-44px-hit-areas', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openDashboard(page);
-  for (const locator of [page.locator('.brand'), page.getByRole('link', { name: 'Privacy' }), page.getByRole('link', { name: 'Terms' })]) {
+  const legal = page.getByRole('navigation', { name: 'Legal' });
+  for (const locator of [page.locator('.brand'), legal.getByRole('link', { name: 'Privacy' }), legal.getByRole('link', { name: 'Terms' })]) {
     const box = await locator.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.width).toBeGreaterThanOrEqual(44);

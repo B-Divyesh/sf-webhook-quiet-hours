@@ -75,6 +75,14 @@ no interface, no photorealism.”
   brands, real people or copyrighted characters requested.
 - Source PNG and exact prompt sidecar live in `assets/src/`; optimized WebP is
   shipped locally. Footer discloses generated imagery.
+- The 1200×630 Open Graph image and 180×180 Apple touch icon are mechanical
+  crops of that same original plate, made locally with ImageMagick on
+  2026-08-30. They introduce no new generated source or third-party asset.
+
+The demo uses the same folio rather than a separate marketing treatment. Its
+dark ink banner stays visible across every sample view, and its two controls
+follow the existing square, labelled action grammar. This makes temporary
+state clear without weakening the product-specific field-guide identity.
 
 ## Performance and accessibility
 

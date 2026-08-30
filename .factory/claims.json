@@ -1,0 +1,72 @@
+[
+  {
+    "id": "demo-sandbox",
+    "claim": "Try realistic sample data without an account or changes to the real receiver.",
+    "where": "landing primary action, demo banner, README",
+    "test": "npx playwright test --grep @claim:demo-sandbox",
+    "sandbox": "fresh browser context; create a server-side demo workspace; mutate and reset it; verify the authenticated real summary remains empty"
+  },
+  {
+    "id": "repeat-compression",
+    "claim": "Repeated webhook failures are grouped into fingerprints.",
+    "where": "landing illustration caption, dashboard summary, README",
+    "test": "npx playwright test --grep @claim:repeat-compression",
+    "sandbox": "fresh /demo workspace; assert 18 deliveries produce 3 fingerprints and 15 compressed repeats"
+  },
+  {
+    "id": "csv-export",
+    "claim": "Exports the fingerprint ledger as CSV.",
+    "where": "dashboard Export CSV action, README",
+    "test": "npx playwright test --grep @claim:csv-export",
+    "sandbox": "fresh /demo workspace; download CSV and assert its header plus one row for each of three fingerprints"
+  },
+  {
+    "id": "privacy-same-origin",
+    "claim": "There is no analytics or cross-tenant telemetry.",
+    "where": "landing facts, footer, privacy page, README",
+    "test": "npx playwright test --grep @claim:privacy-same-origin",
+    "sandbox": "record every request during a demo detail and digest flow; assert only the product origin is contacted"
+  },
+  {
+    "id": "one-time-price",
+    "claim": "Core receiver actions remain free; Field Station is an optional $39 one-time purchase.",
+    "where": "landing facts, Aliases purchase panel, terms, README",
+    "test": "npx playwright test --grep @claim:one-time-price",
+    "sandbox": "fresh browser without a license; assert export and acknowledgement work and exact purchase copy/link are present"
+  },
+  {
+    "id": "encrypted-payloads",
+    "claim": "Webhook payloads are encrypted at rest.",
+    "where": "landing facts, privacy page, README",
+    "test": "cargo test claim_payloads_are_encrypted_at_rest",
+    "sandbox": "temporary SQLite database; store a unique marker, assert ciphertext does not contain it, then decrypt successfully"
+  },
+  {
+    "id": "signed-ingress",
+    "claim": "Endpoint aliases can verify HMAC-SHA256 signatures and group matching events.",
+    "where": "How it works, dashboard, README",
+    "test": "cargo test signed_webhook_is_received_and_grouped",
+    "sandbox": "temporary SQLite database and in-process router with a generated alias and correctly signed webhook"
+  },
+  {
+    "id": "quiet-window",
+    "claim": "Normal fingerprints wait during quiet hours while high severity remains eligible for immediate delivery.",
+    "where": "landing How it works, Quiet rules, README",
+    "test": "cargo test overnight_quiet_window_works",
+    "sandbox": "fixed UTC timestamps covering an overnight quiet window and a daytime window"
+  },
+  {
+    "id": "api-rate-limit",
+    "claim": "Dashboard API calls are limited per client and return 429 with Retry-After.",
+    "where": "README",
+    "test": "cargo test unauthenticated_api_requests_are_rate_limited_before_authentication",
+    "sandbox": "in-process router; send unauthenticated requests from one forwarded IP until 429, then verify another IP remains independent"
+  },
+  {
+    "id": "zero-config-start",
+    "claim": "The production container starts with only PORT and persists generated secrets across restarts.",
+    "where": "README",
+    "test": "cargo test --test runtime_startup production_binary_boots_with_only_port_and_reuses_persisted_secrets",
+    "sandbox": "fresh temporary working directory; start the release test binary twice with a cleared environment and only PORT"
+  }
+]

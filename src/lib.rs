@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     env, fs,
     io::Write,
     path::{Path as FsPath, PathBuf},
@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorError,
@@ -233,6 +234,7 @@ pub struct AppState {
     public_url: String,
     build_sha: String,
     http: reqwest::Client,
+    demos: Arc<RwLock<HashMap<String, DemoWorkspace>>>,
 }
 
 impl AppState {
@@ -265,6 +267,7 @@ impl AppState {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(4))
                 .build()?,
+            demos: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -356,6 +359,15 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
             .finish()
             .expect("valid API rate limit"),
     );
+    let demo_limit = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(SmartIpKeyExtractor)
+            .per_millisecond(10)
+            .burst_size(200)
+            .error_handler(rate_limit_response)
+            .finish()
+            .expect("valid demo rate limit"),
+    );
     let hook = Router::new()
         .route("/hooks/:slug", post(receive_webhook))
         .layer(GovernorLayer { config: hook_limit });
@@ -373,8 +385,38 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
         .route("/digest/send", post(send_digest_now))
         .route("/export.csv", get(export_csv))
         .fallback(api_not_found)
-        .layer(GovernorLayer { config: api_limit })
-        .layer(middleware::from_fn_with_state(state.clone(), admin_auth));
+        .layer(middleware::from_fn_with_state(state.clone(), admin_auth))
+        // The governor must wrap authentication so invalid credentials consume
+        // the same per-client allowance as authenticated API traffic.
+        .layer(GovernorLayer {
+            config: api_limit.clone(),
+        });
+    let demo_api = Router::new()
+        .route("/demo/session", post(create_demo_session))
+        .route("/demo/:workspace/session", delete(discard_demo_session))
+        .route("/demo/:workspace/reset", post(reset_demo_session))
+        .route("/demo/:workspace/summary", get(demo_summary))
+        .route("/demo/:workspace/endpoints", get(demo_endpoints))
+        .route(
+            "/demo/:workspace/endpoints/:id",
+            delete(demo_remove_endpoint),
+        )
+        .route("/demo/:workspace/fingerprints", get(demo_fingerprints))
+        .route(
+            "/demo/:workspace/fingerprints/:fingerprint",
+            get(demo_fingerprint_detail).patch(demo_update_fingerprint),
+        )
+        .route(
+            "/demo/:workspace/fingerprints/:fingerprint/ack",
+            post(demo_ack_fingerprint),
+        )
+        .route(
+            "/demo/:workspace/settings",
+            get(demo_get_settings).put(demo_update_settings),
+        )
+        .route("/demo/:workspace/digest/send", post(demo_send_digest))
+        .route("/demo/:workspace/export.csv", get(demo_export_csv))
+        .layer(GovernorLayer { config: demo_limit });
     // Vite fingerprints compiled JS/CSS. Keep those bytes for a year while
     // ensuring the HTML shell and service worker always revalidate, so a
     // deploy can publish an updated manifest without clients being stranded
@@ -385,7 +427,7 @@ pub fn build_app(state: AppState, dist: PathBuf) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(hook)
-        .nest("/api", api)
+        .nest("/api", api.merge(demo_api))
         .fallback_service(static_service)
         .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
@@ -434,6 +476,15 @@ async fn static_cache_control(req: Request<Body>, next: Next) -> Response {
             header::CACHE_CONTROL,
             HeaderValue::from_static(cache_control),
         );
+        if response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|content_type| content_type.starts_with("text/html"))
+            && !matches!(path.as_str(), "/" | "/demo" | "/privacy" | "/terms")
+        {
+            *response.status_mut() = StatusCode::NOT_FOUND;
+        }
     }
     response
 }
@@ -461,10 +512,12 @@ fn is_fingerprinted_asset(path: &str) -> bool {
     let Some((stem, _extension)) = file_name.rsplit_once('.') else {
         return false;
     };
-    let Some((_name, fingerprint)) = stem.rsplit_once('-') else {
-        return false;
-    };
-    fingerprint.len() >= 8 && fingerprint.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    let bytes = stem.as_bytes();
+    bytes.len() >= 9
+        && bytes[bytes.len() - 9] == b'-'
+        && bytes[bytes.len() - 8..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 async fn admin_auth(
@@ -541,7 +594,7 @@ async fn summary(State(state): State<AppState>) -> Result<Json<Summary>, AppErro
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct EndpointView {
     id: i64,
     slug: String,
@@ -790,7 +843,7 @@ fn make_fingerprint(endpoint_id: i64, event_type: &str, value: &Value) -> String
     hex::encode(&Sha256::digest(canonical.as_bytes())[..10])
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct FingerprintView {
     fingerprint: String,
     endpoint_id: i64,
@@ -838,7 +891,7 @@ fn fingerprint_from_row(r: sqlx::sqlite::SqliteRow) -> FingerprintView {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct FingerprintDetail {
     fingerprint: String,
     event_type: String,
@@ -922,7 +975,7 @@ async fn ack_fingerprint(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct SettingsView {
     quiet_start: String,
     quiet_end: String,
@@ -933,6 +986,384 @@ struct SettingsView {
     notification_url: String,
     escalation_url: String,
     last_delivery_error: Option<String>,
+}
+
+#[derive(Clone)]
+struct DemoWorkspace {
+    created_at: DateTime<Utc>,
+    endpoints: Vec<EndpointView>,
+    fingerprints: Vec<FingerprintView>,
+    details: HashMap<String, FingerprintDetail>,
+    settings: SettingsView,
+}
+
+#[derive(Serialize)]
+struct DemoSession {
+    workspace_id: String,
+    expires_at: String,
+}
+
+fn seeded_demo_workspace() -> DemoWorkspace {
+    let now = Utc::now();
+    let endpoint = EndpointView {
+        id: 1,
+        slug: "demo-deploy-monitor".into(),
+        name: "Deploy monitor".into(),
+        signature_required: true,
+        created_at: (now - ChronoDuration::days(12)).to_rfc3339(),
+    };
+    let samples = [
+        (
+            "demo-deploy-failed",
+            "deployment.failed",
+            6,
+            2,
+            "high",
+            json!({"type":"deployment.failed","status":500,"service":"checkout-api","region":"eu-west"}),
+        ),
+        (
+            "demo-invoice-sync",
+            "invoice.sync.failed",
+            9,
+            9,
+            "normal",
+            json!({"type":"invoice.sync.failed","status":503,"service":"billing-worker","retry":3}),
+        ),
+        (
+            "demo-backup-complete",
+            "backup.completed",
+            3,
+            0,
+            "ignored",
+            json!({"type":"backup.completed","status":200,"service":"nightly-backup"}),
+        ),
+    ];
+    let mut fingerprints = Vec::new();
+    let mut details = HashMap::new();
+    for (index, (fingerprint, event_type, total_count, pending_count, severity, payload)) in
+        samples.into_iter().enumerate()
+    {
+        let received_at = now - ChronoDuration::minutes((index as i64 + 1) * 7);
+        fingerprints.push(FingerprintView {
+            fingerprint: fingerprint.into(),
+            endpoint_id: endpoint.id,
+            endpoint_name: endpoint.name.clone(),
+            event_type: event_type.into(),
+            first_seen: (received_at - ChronoDuration::hours(4)).to_rfc3339(),
+            last_seen: received_at.to_rfc3339(),
+            total_count,
+            pending_count,
+            severity: severity.into(),
+            target_minutes: 30,
+            acknowledged_at: None,
+            overdue: false,
+        });
+        details.insert(
+            fingerprint.into(),
+            FingerprintDetail {
+                fingerprint: fingerprint.into(),
+                event_type: event_type.into(),
+                payload,
+                received_at: received_at.to_rfc3339(),
+                signature_valid: true,
+            },
+        );
+    }
+    DemoWorkspace {
+        created_at: now,
+        endpoints: vec![endpoint],
+        fingerprints,
+        details,
+        settings: SettingsView {
+            quiet_start: "22:00".into(),
+            quiet_end: "08:00".into(),
+            utc_offset_minutes: 0,
+            digest_minutes: 60,
+            retention_days: 7,
+            notification_configured: false,
+            notification_url: String::new(),
+            escalation_url: "https://status.example.test/incidents".into(),
+            last_delivery_error: None,
+        },
+    }
+}
+
+async fn demo_snapshot(state: &AppState, workspace: &str) -> Result<DemoWorkspace, AppError> {
+    let mut demos = state.demos.write().await;
+    let cutoff = Utc::now() - ChronoDuration::hours(24);
+    demos.retain(|_, demo| demo.created_at > cutoff);
+    demos.get(workspace).cloned().ok_or(AppError::NotFound)
+}
+
+async fn create_demo_session(State(state): State<AppState>) -> Json<DemoSession> {
+    let workspace_id: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    let workspace = seeded_demo_workspace();
+    let expires_at = (workspace.created_at + ChronoDuration::hours(24)).to_rfc3339();
+    state
+        .demos
+        .write()
+        .await
+        .insert(workspace_id.clone(), workspace);
+    Json(DemoSession {
+        workspace_id,
+        expires_at,
+    })
+}
+
+async fn discard_demo_session(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<StatusCode, AppError> {
+    state
+        .demos
+        .write()
+        .await
+        .remove(&workspace)
+        .ok_or(AppError::NotFound)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reset_demo_session(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<Json<DemoSession>, AppError> {
+    let mut demos = state.demos.write().await;
+    if !demos.contains_key(&workspace) {
+        return Err(AppError::NotFound);
+    }
+    let seeded = seeded_demo_workspace();
+    let expires_at = (seeded.created_at + ChronoDuration::hours(24)).to_rfc3339();
+    demos.insert(workspace.clone(), seeded);
+    Ok(Json(DemoSession {
+        workspace_id: workspace,
+        expires_at,
+    }))
+}
+
+fn demo_summary_value(workspace: &DemoWorkspace) -> Summary {
+    let total: i64 = workspace
+        .fingerprints
+        .iter()
+        .map(|fingerprint| fingerprint.total_count)
+        .sum();
+    Summary {
+        endpoints: workspace.endpoints.len() as i64,
+        fingerprints: workspace.fingerprints.len() as i64,
+        events_today: total,
+        pending: workspace
+            .fingerprints
+            .iter()
+            .filter(|fingerprint| fingerprint.severity != "ignored")
+            .map(|fingerprint| fingerprint.pending_count)
+            .sum(),
+        compressed: (total - workspace.fingerprints.len() as i64).max(0),
+        high_unacknowledged: workspace
+            .fingerprints
+            .iter()
+            .filter(|fingerprint| {
+                fingerprint.severity == "high" && fingerprint.acknowledged_at.is_none()
+            })
+            .count() as i64,
+    }
+}
+
+async fn demo_summary(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<Json<Summary>, AppError> {
+    Ok(Json(demo_summary_value(
+        &demo_snapshot(&state, &workspace).await?,
+    )))
+}
+
+async fn demo_endpoints(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<Json<Vec<EndpointView>>, AppError> {
+    Ok(Json(demo_snapshot(&state, &workspace).await?.endpoints))
+}
+
+async fn demo_fingerprints(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<Json<Vec<FingerprintView>>, AppError> {
+    Ok(Json(demo_snapshot(&state, &workspace).await?.fingerprints))
+}
+
+async fn demo_fingerprint_detail(
+    State(state): State<AppState>,
+    Path((workspace, fingerprint)): Path<(String, String)>,
+) -> Result<Json<FingerprintDetail>, AppError> {
+    demo_snapshot(&state, &workspace)
+        .await?
+        .details
+        .get(&fingerprint)
+        .cloned()
+        .map(Json)
+        .ok_or(AppError::NotFound)
+}
+
+async fn demo_ack_fingerprint(
+    State(state): State<AppState>,
+    Path((workspace, fingerprint)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    let mut demos = state.demos.write().await;
+    let demo = demos.get_mut(&workspace).ok_or(AppError::NotFound)?;
+    let item = demo
+        .fingerprints
+        .iter_mut()
+        .find(|item| item.fingerprint == fingerprint)
+        .ok_or(AppError::NotFound)?;
+    item.acknowledged_at = Some(Utc::now().to_rfc3339());
+    item.pending_count = 0;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn demo_update_fingerprint(
+    State(state): State<AppState>,
+    Path((workspace, fingerprint)): Path<(String, String)>,
+    Json(input): Json<FingerprintUpdate>,
+) -> Result<StatusCode, AppError> {
+    if !["normal", "high", "ignored"].contains(&input.severity.as_str()) {
+        return Err(AppError::Invalid(
+            "Severity must be normal, high, or ignored.".into(),
+        ));
+    }
+    if !(1..=1440).contains(&input.target_minutes) {
+        return Err(AppError::Invalid(
+            "Target must be between 1 and 1,440 minutes.".into(),
+        ));
+    }
+    let mut demos = state.demos.write().await;
+    let demo = demos.get_mut(&workspace).ok_or(AppError::NotFound)?;
+    let item = demo
+        .fingerprints
+        .iter_mut()
+        .find(|item| item.fingerprint == fingerprint)
+        .ok_or(AppError::NotFound)?;
+    item.severity = input.severity;
+    item.target_minutes = input.target_minutes;
+    item.acknowledged_at = None;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn demo_remove_endpoint(
+    State(state): State<AppState>,
+    Path((workspace, id)): Path<(String, i64)>,
+) -> Result<StatusCode, AppError> {
+    let mut demos = state.demos.write().await;
+    let demo = demos.get_mut(&workspace).ok_or(AppError::NotFound)?;
+    let before = demo.endpoints.len();
+    demo.endpoints.retain(|endpoint| endpoint.id != id);
+    if demo.endpoints.len() == before {
+        return Err(AppError::NotFound);
+    }
+    demo.fingerprints.retain(|item| item.endpoint_id != id);
+    let remaining = demo
+        .fingerprints
+        .iter()
+        .map(|item| item.fingerprint.clone())
+        .collect::<BTreeSet<_>>();
+    demo.details
+        .retain(|fingerprint, _| remaining.contains(fingerprint));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn demo_get_settings(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<Json<SettingsView>, AppError> {
+    Ok(Json(demo_snapshot(&state, &workspace).await?.settings))
+}
+
+async fn demo_update_settings(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+    Json(input): Json<SettingsUpdate>,
+) -> Result<StatusCode, AppError> {
+    validate_time(&input.quiet_start)?;
+    validate_time(&input.quiet_end)?;
+    if !(-720..=840).contains(&input.utc_offset_minutes)
+        || !(5..=1440).contains(&input.digest_minutes)
+        || !(1..=90).contains(&input.retention_days)
+    {
+        return Err(AppError::Invalid("A demo setting is out of range.".into()));
+    }
+    let mut demos = state.demos.write().await;
+    let demo = demos.get_mut(&workspace).ok_or(AppError::NotFound)?;
+    demo.settings = SettingsView {
+        quiet_start: input.quiet_start,
+        quiet_end: input.quiet_end,
+        utc_offset_minutes: input.utc_offset_minutes,
+        digest_minutes: input.digest_minutes,
+        retention_days: input.retention_days,
+        notification_configured: false,
+        // Demo notification destinations are deliberately never retained or called.
+        notification_url: String::new(),
+        escalation_url: input.escalation_url,
+        last_delivery_error: None,
+    };
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn demo_send_digest(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let mut demos = state.demos.write().await;
+    let demo = demos.get_mut(&workspace).ok_or(AppError::NotFound)?;
+    let mut sent = 0;
+    for item in &mut demo.fingerprints {
+        if item.severity == "normal" && item.pending_count > 0 {
+            sent += 1;
+            item.pending_count = 0;
+        }
+    }
+    Ok(Json(json!({"sent":sent})))
+}
+
+async fn demo_export_csv(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+) -> Result<Response, AppError> {
+    let demo = demo_snapshot(&state, &workspace).await?;
+    let mut csv = "alias,fingerprint,event_type,severity,total_count,pending_count,first_seen,last_seen,acknowledged_at\n".to_string();
+    for item in demo.fingerprints {
+        let cells = [
+            item.endpoint_name,
+            item.fingerprint,
+            item.event_type,
+            item.severity,
+            item.total_count.to_string(),
+            item.pending_count.to_string(),
+            item.first_seen,
+            item.last_seen,
+            item.acknowledged_at.unwrap_or_default(),
+        ];
+        csv.push_str(
+            &cells
+                .iter()
+                .map(|cell| format!("\"{}\"", cell.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        csv.push('\n');
+    }
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=webhook-fingerprints-demo.csv",
+            ),
+        ],
+        csv,
+    )
+        .into_response())
 }
 async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsView>, AppError> {
     Ok(Json(load_settings(&state).await?))
@@ -1248,6 +1679,7 @@ mod tests {
             make_fingerprint(1, "failed", &b)
         );
     }
+    // @claim:quiet-window
     #[test]
     fn overnight_quiet_window_works() {
         let mut s = SettingsView {
@@ -1279,6 +1711,7 @@ mod tests {
         assert_eq!(days, 7);
     }
 
+    // @claim:signed-ingress
     #[tokio::test]
     async fn signed_webhook_is_received_and_grouped() {
         let state = state().await;
@@ -1330,6 +1763,52 @@ mod tests {
         assert_eq!(json[0]["total_count"], 1);
     }
 
+    // @claim:encrypted-payloads
+    #[tokio::test]
+    async fn claim_payloads_are_encrypted_at_rest() {
+        let state = state().await;
+        let plaintext = br#"{"type":"private.failed","secret_marker":"never-store-plain"}"#;
+        let encrypted = state.encrypt(plaintext).unwrap();
+        sqlx::query("INSERT INTO endpoints(slug,name,token_hash,created_at) VALUES(?,?,?,?)")
+            .bind("claim-endpoint")
+            .bind("Claim endpoint")
+            .bind("hash")
+            .bind(Utc::now().to_rfc3339())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let endpoint_id: i64 = sqlx::query_scalar("SELECT id FROM endpoints LIMIT 1")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO fingerprints(fingerprint,endpoint_id,event_type,first_seen,last_seen,total_count,pending_count) VALUES(?,?,?,?,?,1,1)")
+            .bind("claim-fingerprint")
+            .bind(endpoint_id)
+            .bind("private.failed")
+            .bind(Utc::now().to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO events(endpoint_id,fingerprint,event_type,received_at,payload_encrypted,signature_valid) VALUES(?,?,?,?,?,1)")
+            .bind(endpoint_id)
+            .bind("claim-fingerprint")
+            .bind("private.failed")
+            .bind(Utc::now().to_rfc3339())
+            .bind(&encrypted)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let stored: Vec<u8> = sqlx::query_scalar("SELECT payload_encrypted FROM events LIMIT 1")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_ne!(stored, plaintext);
+        assert!(!String::from_utf8_lossy(&stored).contains("never-store-plain"));
+        assert_eq!(state.decrypt(&stored).unwrap(), plaintext);
+    }
+
     #[tokio::test]
     async fn static_files_have_update_safe_cache_headers() {
         let state = state().await;
@@ -1341,29 +1820,39 @@ mod tests {
             "self.addEventListener('fetch', () => {})",
         )
         .unwrap();
-        std::fs::write(dist.path().join("assets/index-Ab12Cd34.js"), "export {};").unwrap();
+        std::fs::write(dist.path().join("assets/index-Ab12_cd3.js"), "export {};").unwrap();
         std::fs::write(dist.path().join("assets/moon-bloom-480.webp"), "image").unwrap();
         let app = build_app(state, dist.path().to_path_buf());
 
-        for (uri, expected) in [
+        for (uri, expected_status, expected_cache) in [
             (
-                "/assets/index-Ab12Cd34.js",
+                "/assets/index-Ab12_cd3.js",
+                StatusCode::OK,
                 "public, max-age=31536000, immutable",
             ),
-            ("/assets/moon-bloom-480.webp", "public, max-age=86400"),
-            ("/assets/missing-Ab12Cd34.js", "no-cache"),
-            ("/sw.js", "no-cache"),
-            ("/privacy", "no-cache"),
+            (
+                "/assets/moon-bloom-480.webp",
+                StatusCode::OK,
+                "public, max-age=86400",
+            ),
+            (
+                "/assets/missing-Ab12_cd3.js",
+                StatusCode::NOT_FOUND,
+                "no-cache",
+            ),
+            ("/sw.js", StatusCode::OK, "no-cache"),
+            ("/privacy", StatusCode::OK, "no-cache"),
+            ("/missing-page", StatusCode::NOT_FOUND, "no-cache"),
         ] {
             let response = app
                 .clone()
                 .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.status(), expected_status, "{uri}");
             assert_eq!(
                 response.headers().get(header::CACHE_CONTROL).unwrap(),
-                expected,
+                expected_cache,
                 "{uri}"
             );
         }
@@ -1409,5 +1898,127 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(other_client.status(), StatusCode::OK);
+    }
+
+    // @claim:api-rate-limit
+    #[tokio::test]
+    async fn unauthenticated_api_requests_are_rate_limited_before_authentication() {
+        let state = state().await;
+        let dist = tempfile::tempdir().unwrap();
+        let app = build_app(state, dist.path().to_path_buf());
+        let request_for = |ip: &str| {
+            Request::builder()
+                .uri("/api/summary")
+                .header("x-forwarded-for", ip)
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let mut unauthorized = 0;
+        let mut limited = None;
+        for _ in 0..100 {
+            let response = app
+                .clone()
+                .oneshot(request_for("203.0.113.91"))
+                .await
+                .unwrap();
+            match response.status() {
+                StatusCode::UNAUTHORIZED => unauthorized += 1,
+                StatusCode::TOO_MANY_REQUESTS => {
+                    limited = Some(response);
+                    break;
+                }
+                status => panic!("unexpected pre-auth response: {status}"),
+            }
+        }
+        assert!(unauthorized > 0);
+        let limited = limited.expect("invalid credentials must not bypass the API governor");
+        assert!(limited.headers().contains_key(header::RETRY_AFTER));
+
+        let other_client = app.oneshot(request_for("203.0.113.92")).await.unwrap();
+        assert_eq!(other_client.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn demo_workspaces_are_seeded_isolated_resettable_and_never_touch_real_data() {
+        let state = state().await;
+        let dist = tempfile::tempdir().unwrap();
+        let app = build_app(state, dist.path().to_path_buf());
+        let request = |method: &str, uri: &str| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("x-forwarded-for", "203.0.113.111")
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let created = app
+            .clone()
+            .oneshot(request("POST", "/api/demo/session"))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let created: Value =
+            serde_json::from_slice(&to_bytes(created.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        let workspace = created["workspace_id"].as_str().unwrap();
+
+        let demo_summary = app
+            .clone()
+            .oneshot(request("GET", &format!("/api/demo/{workspace}/summary")))
+            .await
+            .unwrap();
+        assert_eq!(demo_summary.status(), StatusCode::OK);
+        let demo_summary: Value =
+            serde_json::from_slice(&to_bytes(demo_summary.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(demo_summary["events_today"], 18);
+        assert_eq!(demo_summary["fingerprints"], 3);
+        assert_eq!(demo_summary["compressed"], 15);
+
+        let ack = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                &format!("/api/demo/{workspace}/fingerprints/demo-deploy-failed/ack"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ack.status(), StatusCode::NO_CONTENT);
+
+        let real_summary = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/summary")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header("x-forwarded-for", "203.0.113.112")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let real_summary: Value =
+            serde_json::from_slice(&to_bytes(real_summary.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(real_summary["events_today"], 0);
+        assert_eq!(real_summary["fingerprints"], 0);
+
+        let reset = app
+            .clone()
+            .oneshot(request("POST", &format!("/api/demo/{workspace}/reset")))
+            .await
+            .unwrap();
+        assert_eq!(reset.status(), StatusCode::OK);
+        let restored = app
+            .oneshot(request("GET", &format!("/api/demo/{workspace}/summary")))
+            .await
+            .unwrap();
+        let restored: Value =
+            serde_json::from_slice(&to_bytes(restored.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(restored["high_unacknowledged"], 1);
+        assert_eq!(restored["events_today"], 18);
     }
 }

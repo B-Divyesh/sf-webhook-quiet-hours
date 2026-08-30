@@ -56,6 +56,7 @@ fn stop_and_read_logs(mut child: Child) -> String {
     )
 }
 
+// @claim:zero-config-start
 #[tokio::test]
 async fn production_binary_boots_with_only_port_and_reuses_persisted_secrets() {
     let directory = tempfile::tempdir().unwrap();

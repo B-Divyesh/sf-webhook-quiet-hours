@@ -10,6 +10,17 @@ link.
 It is an aggregation and alerting aid—not a webhook delivery/retry proxy or a
 general automation platform.
 
+## Try the sample workspace
+
+Open `/demo` or choose **Try it with sample data** on the first screen. The
+server creates a random in-memory workspace with 18 deliveries grouped into
+three fingerprints. It needs no account or admin token. Demo changes never
+touch the real SQLite tenant, and the workspace expires after 24 hours.
+
+Use **Reset demo** to restore the sample. Use **Start for real** to delete the
+temporary workspace and return to the server login. See
+[.factory/demo.md](.factory/demo.md) for the exact isolation contract.
+
 ## What v1 includes
 
 - Private endpoint keys and optional HMAC-SHA256 verification compatible with
@@ -48,11 +59,14 @@ the value from `data/admin-token` into the dashboard login. Keep the whole
 Quality commands:
 
 ```sh
-npm test          # Vitest plus Rust tests
+npm test          # Vitest, Rust tests, and Playwright against the built server
 npm run check     # TypeScript, rustfmt, Clippy
 npm run build     # reproducible frontend output in dist/
 cargo build --release --locked
 ```
+
+Tested product claims and their exact commands are listed in
+[.factory/claims.json](.factory/claims.json).
 
 ## Production configuration
 
