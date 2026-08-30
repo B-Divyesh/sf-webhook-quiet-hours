@@ -1,5 +1,14 @@
 # Webhook Quiet Hours — build handoff
 
+## Independent verification 4 — FAIL (2026-08-30 UTC)
+
+Candidate `123678eb3a4b6341fc84d0c0eb018f1cb12e6cab` at
+`https://webhook-quiet-hours.sociobot.in` **FAILS release verification**.
+
+The deployed `/health` SHA and live HTML/JS/CSS hashes exactly match the candidate, so this is a candidate defect rather than a deployment-only failure. Core local tests, checks, production frontend build and Rust release build pass; receiver flow, encryption/signature grouping, CSV, validation and authenticated rate limiting were exercised. Full evidence is in `.factory/verification-4.md`.
+
+Release blockers: `.factory/claims.json` is missing; the first screen lacks the mandated one-click sample-data demo and plain first-read explanation; `/demo` is only SPA fallback HTML; and unauthenticated live API traffic bypasses the API rate limiter (60 same-client requests all returned 401, never 429/`Retry-After`). Do not deploy/release until these are corrected and independently re-verified.
+
 ## Repair 4 — verifier accessibility and interaction remediation (2026-08-30 UTC)
 
 **Product-QA and deployment result: PASS.** This repair preserves the
