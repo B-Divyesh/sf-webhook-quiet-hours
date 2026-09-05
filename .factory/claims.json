@@ -137,7 +137,7 @@
     "claim": "The production image stores SQLite and generated secrets together under the configured /data mount.",
     "where": "README",
     "test": "cargo test --test runtime_startup production_binary_writes_all_state_to_the_configured_data_mount",
-    "sandbox": "fresh temporary directory acting as the mounted data path; start the production binary and assert the database plus both generated secret files exist only there"
+    "sandbox": "fresh temporary directory acting as the mounted data path; start two production processes against it and assert both become ready while the database plus generated secrets exist only there"
   },
   {
     "id": "graceful-shutdown",

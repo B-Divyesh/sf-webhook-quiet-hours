@@ -153,7 +153,9 @@ any HTTPS endpoint accepting `{ "text": "…" }`.
 The root `Dockerfile` builds both Vite and Rust in separate stages, runs as a
 non-root user, serves the frontend and API on port 8080, and persists SQLite at
 `/data`. The fleet mounts that directory and keeps the app at one replica so
-SQLite and per-client rate limits remain consistent. Deployment, DNS, TLS,
+SQLite and per-client rate limits remain consistent. SQLite uses whole-file
+coordination on the mounted share; a process-level test opens the same database
+from two rolling server processes before every release. Deployment, DNS, TLS,
 backups, and reverse-proxy trust remain the operator's responsibility. The
 health endpoint is `GET /health`.
 
