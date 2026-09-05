@@ -27,7 +27,10 @@ use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Row, SqlitePool,
+};
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_governor::{
@@ -89,7 +92,7 @@ impl AppConfig {
                 }
             });
             format!(
-                "sqlite://{}/quiet-hours.db?mode=rwc",
+                "sqlite://{}/webhook-quiet-hours.sqlite3?mode=rwc",
                 data_directory.display()
             )
         });
@@ -266,12 +269,14 @@ impl AppState {
                 std::fs::create_dir_all(parent)?;
             }
         }
+        let connect_options = config
+            .database_url
+            .parse::<SqliteConnectOptions>()?
+            .busy_timeout(Duration::from_secs(30))
+            .foreign_keys(true);
         let pool = SqlitePoolOptions::new()
-            .max_connections(8)
-            .connect(&config.database_url)
-            .await?;
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&pool)
+            .max_connections(1)
+            .connect_with(connect_options)
             .await?;
         sqlx::migrate!().run(&pool).await?;
         Ok(Self {

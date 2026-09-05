@@ -206,7 +206,11 @@ async fn production_binary_writes_all_state_to_the_configured_data_mount() {
     let mut child = start_with_data_mount(working_directory.path(), data_mount.path(), port);
     let _client = wait_until_ready(&mut child, port).await;
 
-    for name in ["quiet-hours.db", "admin-token", "encryption-key"] {
+    for name in [
+        "webhook-quiet-hours.sqlite3",
+        "admin-token",
+        "encryption-key",
+    ] {
         assert!(
             data_mount.path().join(name).is_file(),
             "missing {name} in data mount"
