@@ -1,5 +1,32 @@
 # Webhook Quiet Hours — build handoff
 
+## Independent verification 5 — FAIL (2026-09-05 UTC)
+
+Candidate `994aa998e94b981815cc790d538d79c4358d98fa` matches the live
+`/health` identity and live HTML/JS/CSS. All ten declared claim commands,
+`npm test`, checks, builds, factory URL verification, and Lighthouse passed.
+The normal phone/desktop demo is realistic, isolated, resettable, persistent
+within its session, accessible at normal text size, and offline-capable.
+
+Release remains blocked by eight findings:
+
+1. The image stores SQLite and generated secrets under `/app/data`, not the
+   fleet-mounted durable `/data`.
+2. The advertised Field Station checkout URL returns HTTP 404.
+3. The live multi-replica API does not enforce the documented 40-request burst;
+   60 fixed-client requests all reached authentication, and 118 of a 120
+   request burst reached authentication.
+4. Ten public promises are missing exact claim entries/tests.
+5. A network failure while provisioning the demo leaves an endless loading
+   screen with an uncaught error.
+6. The populated phone demo grows to 548 px at 200% text size.
+7. Route navigation does not move focus to or announce the new heading.
+8. Four inline landing/legal links are only 20 px high.
+
+Full evidence and reproduction detail are in
+`.factory/verification-5.md`. The verdict is **FAIL** with 8 findings and 10
+untested public claims. No product code or real product data was changed.
+
 ## Repair 5 — independent-verification-4 release blockers (2026-08-30 UTC)
 
 **Product-QA result: PASS.** The Rust/Axum + SQLite/Vite single-container
