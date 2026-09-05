@@ -179,9 +179,9 @@ test('@claim:license-validation stores, verifies, caches, and sends a valid retu
 });
 
 for (const viewport of [{ name: 'mobile', width: 390, height: 844 }, { name: 'desktop', width: 1440, height: 900 }]) {
-  test(`landing and demo pass accessibility at ${viewport.name}`, async ({ page }) => {
+  test(`public routes pass accessibility at ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    for (const route of ['/', '/demo']) {
+    for (const route of ['/', '/demo', '/privacy', '/terms', '/missing-field-note']) {
       await page.goto(route);
       for (const theme of ['light', 'dark']) {
         if (theme === 'dark') await page.getByRole('button', { name: 'Toggle color theme' }).click();
