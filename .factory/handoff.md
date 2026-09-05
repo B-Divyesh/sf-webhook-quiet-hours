@@ -1,17 +1,21 @@
-# Webhook Quiet Hours — repair 6 handoff
+# Webhook Quiet Hours — verification 6 handoff
 
 ## Status
 
-Repair 6 is complete and deployed. The live service at
-`https://webhook-quiet-hours.sociobot.in` reports implementation
-`eb8b5e072ce0f47d70b3d954c5c104330ac14465` from `/health`.
+Repair 6 is complete and independently verified. The live service at
+`https://webhook-quiet-hours.sociobot.in` reports documentation commit
+`10eab6c88a98c3844a7c2da19aec77d26de48839` from `/health`; its implementation
+is `eb8b5e072ce0f47d70b3d954c5c104330ac14465`. The intervening changes are
+documentation only, and a clean build exactly matches the live HTML,
+JavaScript, and CSS assets.
 
-The deployed image is
+The implementation image was built from
 `sociobotregistry.azurecr.io/sf-webhook-quiet-hours:eb8b5e072ce0`, built by
 ACR run `ch23e`. Container Apps revision
 `sf-webhook-quiet-hours--0000015` is the only active revision and has one
-healthy replica. Later handoff/catalog commits are documentation-only; the
-implementation SHA above is the deployed source identity.
+healthy replica. The currently reported build identity is the later
+documentation-only commit; the implementation SHA above remains the product
+source identity.
 
 ## Verification 5 findings closed
 
@@ -78,7 +82,8 @@ implementation SHA above is the deployed source identity.
 
 ## Public verification
 
-- `/health`: HTTP 200 with the exact implementation SHA above.
+- `/health`: HTTP 200 with documentation SHA `10eab6c…`; the implementation
+  source remains `eb8b5e0…`, and clean-built web assets match live exactly.
 - Factory URL verification: 569 ms load, correct title and language, one h1,
   main landmark, complete image alternatives and button names, no console or
   page errors.
