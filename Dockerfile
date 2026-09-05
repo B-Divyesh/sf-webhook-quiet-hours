@@ -18,18 +18,18 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system quiet-hours \
     && useradd --system --gid quiet-hours --home-dir /app quiet-hours \
-    && mkdir -p /app/data \
-    && chown -R quiet-hours:quiet-hours /app
+    && mkdir -p /data \
+    && chown -R quiet-hours:quiet-hours /app /data
 WORKDIR /app
 COPY --from=rust-builder /build/target/release/webhook-quiet-hours /usr/local/bin/webhook-quiet-hours
 COPY --from=web-builder /build/dist /app/dist
 USER quiet-hours
 ENV PORT=8080 \
     APP_ENV=production \
-    DATABASE_URL="sqlite:///app/data/quiet-hours.db?mode=rwc" \
+    DATA_DIR=/data \
     DIST_DIR=/app/dist \
     RUST_LOG=webhook_quiet_hours=info,tower_http=info \
     BUILD_SHA=${BUILD_SHA}
 EXPOSE 8080
-VOLUME ["/app/data"]
+VOLUME ["/data"]
 ENTRYPOINT ["/usr/local/bin/webhook-quiet-hours"]

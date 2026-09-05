@@ -28,6 +28,19 @@ fn start_with_only_port(directory: &Path, port: u16, production: bool) -> Child 
         .unwrap()
 }
 
+fn start_with_data_mount(directory: &Path, data_mount: &Path, port: u16) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_webhook-quiet-hours"))
+        .env_clear()
+        .env("PORT", port.to_string())
+        .env("DATA_DIR", data_mount)
+        .env("APP_ENV", "production")
+        .current_dir(directory)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
 async fn wait_until_ready(child: &mut Child, port: u16) -> reqwest::Client {
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{port}/health");
@@ -154,4 +167,51 @@ async fn production_binary_boots_with_only_port_and_reuses_persisted_secrets() {
     let second_logs = stop_and_read_logs(second);
     assert!(second_logs.contains("\"admin_token_source\":\"persisted\""));
     assert!(second_logs.contains("\"encryption_key_source\":\"persisted\""));
+}
+
+// @claim:graceful-shutdown
+#[cfg(unix)]
+#[tokio::test]
+async fn production_binary_exits_cleanly_on_sigterm() {
+    let directory = tempfile::tempdir().unwrap();
+    let port = unused_port();
+    let mut child = start_with_only_port(directory.path(), port, true);
+    let _client = wait_until_ready(&mut child, port).await;
+    let status = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    for _ in 0..100 {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(
+                status.success(),
+                "server did not shut down cleanly: {status}"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let _ = child.kill();
+    panic!("server did not exit within 2.5 seconds after SIGTERM");
+}
+
+// @claim:durable-data-path
+#[tokio::test]
+async fn production_binary_writes_all_state_to_the_configured_data_mount() {
+    let working_directory = tempfile::tempdir().unwrap();
+    let data_mount = tempfile::tempdir().unwrap();
+    let port = unused_port();
+    let mut child = start_with_data_mount(working_directory.path(), data_mount.path(), port);
+    let _client = wait_until_ready(&mut child, port).await;
+
+    for name in ["quiet-hours.db", "admin-token", "encryption-key"] {
+        assert!(
+            data_mount.path().join(name).is_file(),
+            "missing {name} in data mount"
+        );
+    }
+    assert!(!working_directory.path().join("data").exists());
+    let _ = stop_and_read_logs(child);
 }

@@ -84,7 +84,7 @@ async function openDashboard(page: Page): Promise<void> {
   await page.addInitScript(() => sessionStorage.setItem('qh_admin_token', 'qa-token'));
   await mockDashboardApi(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { level: 1, name: 'Webhook observations' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Webhook failures' })).toBeVisible();
 }
 
 for (const viewport of [{ name: 'mobile', width: 390, height: 844 }, { name: 'desktop', width: 1440, height: 900 }]) {

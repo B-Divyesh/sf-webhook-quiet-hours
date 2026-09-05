@@ -32,11 +32,12 @@ temporary workspace and return to the server login. See
 - Normal, high, and record-only rules with acknowledgement targets.
 - Configurable quiet window, UTC offset, digest cadence, escalation link, and
   automatic payload deletion.
-- Slack-compatible notification webhook, manual digest, CSV export, and
-  responsive/keyboard-accessible dashboard.
+- Slack-compatible notification webhook, manual digest, CSV export, and a
+  dashboard that reflows at 200% text size and works by keyboard.
 - Free use with one alias and seven-day retention. The optional $39 one-time
   Field Station browser unlock adds unlimited aliases and up to 90-day retention
-  through the Sociobot billing API. Signing, escalation, and export are not gated.
+  through the Sociobot billing API. The receiver verifies the license before a
+  paid alias or retention change. Signing, escalation, and export are not gated.
 
 There is no analytics, cross-tenant telemetry, third-party script, or CDN font.
 
@@ -51,11 +52,11 @@ cargo run
 ```
 
 Open `http://localhost:8080`. On first boot the server generates an admin token
-and encryption key with the operating system CSPRNG and writes them to
-`data/admin-token` and `data/encryption-key` with owner-only permissions. Paste
-the value from `data/admin-token` into the dashboard login. Keep the whole
-`data/` directory private and backed up. For live frontend reload, run
-`npm run dev` alongside `cargo run` and open port 5173.
+and encryption key with the operating system CSPRNG. Outside the container, it
+writes them to `data/admin-token` and `data/encryption-key` with owner-only
+permissions. Paste the value from `data/admin-token` into the dashboard login.
+Keep the whole `data/` directory private and backed up. For live frontend
+reload, run `npm run dev` alongside `cargo run` and open port 5173.
 
 Quality commands:
 
@@ -71,22 +72,25 @@ Tested product claims and their exact commands are listed in
 
 ## Production configuration
 
-The container starts with no runtime configuration other than `PORT`. At first
-boot it generates and persists both secrets beside the SQLite database under
-`/app/data`; subsequent boots reuse them. Explicit environment values override
-the persisted defaults. Startup emits only whether each value was `generated`,
-`persisted`, or `supplied`—never the secret itself.
+The container starts with no runtime configuration other than `PORT`. Its image
+uses the fleet-mounted `/data` directory. At first boot it stores SQLite and
+both generated secrets there; subsequent boots reuse them. Outside the image,
+the fallback is `./data`. Explicit environment values override these defaults.
+Startup logs only whether each secret was `generated`, `persisted`, or
+`supplied`—never its value.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `ADMIN_TOKEN` | no | CSPRNG value persisted beside SQLite | Dashboard bearer token |
 | `DATA_ENCRYPTION_KEY` | no | CSPRNG value persisted beside SQLite | Base64 encoding of exactly 32 random bytes |
-| `DATABASE_URL` | no | `sqlite://data/quiet-hours.db?mode=rwc` | SQLite connection URL |
+| `DATA_DIR` | no | `/data` in the image; `./data` otherwise | Directory for SQLite and generated secrets |
+| `DATABASE_URL` | no | built from `DATA_DIR` | SQLite connection URL override |
 | `PUBLIC_URL` | no | `http://localhost:8080` | Base used in generated hooks/review links |
 | `PORT` | no | `8080` | HTTP listener |
 | `BUILD_SHA` | no | `development` | Returned by `/health` |
 | `DIST_DIR` | no | `dist` | Built frontend directory |
 | `VITE_BILLING_BASE` | build only | `https://api.sociobot.in` | Use `https://pilot-api.sociobot.in` for staging |
+| `BILLING_BASE` | no | `https://api.sociobot.in` | Server-side Field Station license verification |
 
 To override the generated encryption key, create one without storing it in the
 repository:
@@ -103,12 +107,12 @@ docker build \
   --build-arg BUILD_SHA="$(git rev-parse HEAD)" \
   -t webhook-quiet-hours .
 docker run --rm -p 8080:8080 \
-  -v webhook-quiet-hours-data:/app/data \
+  -v webhook-quiet-hours-data:/data \
   webhook-quiet-hours
 ```
 
 Read the generated login token with
-`docker exec <container> cat /app/data/admin-token`. In a managed deployment,
+`docker exec <container> cat /data/admin-token`. In a managed deployment,
 read the same file from the mounted data volume or supply `ADMIN_TOKEN` through
 its secret manager. Supply `PUBLIC_URL` when generated receiver URLs must use a
 public hostname; it is not required for startup.
@@ -148,8 +152,10 @@ any HTTPS endpoint accepting `{ "text": "…" }`.
 
 The root `Dockerfile` builds both Vite and Rust in separate stages, runs as a
 non-root user, serves the frontend and API on port 8080, and persists SQLite at
-`/app/data`. Deployment, DNS, TLS, backups, and reverse-proxy trust remain the
-operator's responsibility. The health endpoint is `GET /health`.
+`/data`. The fleet mounts that directory and keeps the app at one replica so
+SQLite and per-client rate limits remain consistent. Deployment, DNS, TLS,
+backups, and reverse-proxy trust remain the operator's responsibility. The
+health endpoint is `GET /health`.
 
 See [.factory/design.md](.factory/design.md) for the visual system and generated
 asset provenance. Privacy and terms are available in-product at `/privacy` and

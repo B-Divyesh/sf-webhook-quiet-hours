@@ -1,6 +1,6 @@
 # Landing-page copy audit
 
-Audited 2026-08-30. Counts treat hyphenated terms and `$39` as one word.
+Audited 2026-09-05. Counts treat hyphenated terms and `$39` as one word.
 No line exceeds 22 words. No banned marketing word appears; “unlock” is used
 only for the literal paid license.
 
@@ -13,7 +13,7 @@ only for the literal paid license.
 | Opens a private, temporary workspace with realistic failures. | 8 | Pass |
 | Open your server | 3 | Pass |
 | Open with admin token | 4 | Pass |
-| Read the token from `data/admin-token`. | 6 | Pass |
+| Read the token from `/data/admin-token`. | 6 | Pass |
 | It stays in this browser tab. | 6 | Pass |
 | No analytics or cross-tenant telemetry | 5 | Pass |
 | Webhook payloads encrypted at rest | 5 | Pass |

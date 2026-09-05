@@ -4,7 +4,14 @@
     "claim": "Try realistic sample data without an account or changes to the real receiver.",
     "where": "landing primary action, demo banner, README",
     "test": "npx playwright test --grep @claim:demo-sandbox",
-    "sandbox": "fresh browser context; create a server-provisioned demo workspace in the demo session namespace; mutate and reset it; verify the authenticated real summary remains empty"
+    "sandbox": "fresh browser context; create a server-provisioned demo workspace; mutate and reset it; verify the authenticated real summary remains empty"
+  },
+  {
+    "id": "demo-expiry",
+    "claim": "Demo workspaces expire after 24 hours.",
+    "where": "demo banner, README",
+    "test": "cargo test demo_workspaces_expire_after_24_hours",
+    "sandbox": "in-memory demo map with a workspace created 25 hours earlier; request a snapshot and assert it is removed and unavailable"
   },
   {
     "id": "repeat-compression",
@@ -29,10 +36,24 @@
   },
   {
     "id": "one-time-price",
-    "claim": "Core receiver actions remain free; Field Station is an optional $39 one-time purchase.",
+    "claim": "Core receiver actions remain free; Field Station is an optional $39 one-time purchase through the registered checkout.",
     "where": "landing facts, Aliases purchase panel, terms, README",
     "test": "npx playwright test --grep @claim:one-time-price",
-    "sandbox": "fresh browser without a license; assert export and acknowledgement work and exact purchase copy/link are present"
+    "sandbox": "fresh browser without a license; exercise free export and acknowledgement; assert the exact offer and a 303 redirect to the hosted Dodo checkout"
+  },
+  {
+    "id": "license-validation",
+    "claim": "A returned Field Station license is stored locally, verified once per day, and sent to the receiver only for entitlement checks.",
+    "where": "restore dialog, privacy page, README",
+    "test": "npx playwright test --grep @claim:license-validation",
+    "sandbox": "recorded valid billing verdict; assert URL stripping, local cache, one verification across reload, paid retention UI, and license header on the paid API action"
+  },
+  {
+    "id": "paid-limits",
+    "claim": "Free use allows one alias and seven-day retention; a valid Field Station license allows more aliases and up to 90 days.",
+    "where": "landing pricing, Aliases panel, Quiet rules, terms, README",
+    "test": "cargo test free_limits_reject_paid_actions_until_the_license_is_valid",
+    "sandbox": "temporary receiver plus recorded billing verifier; assert second alias and 90-day retention return 402 without a license and succeed with a valid license"
   },
   {
     "id": "encrypted-payloads",
@@ -42,11 +63,46 @@
     "sandbox": "temporary SQLite database; store a unique marker, assert ciphertext does not contain it, then decrypt successfully"
   },
   {
+    "id": "encrypted-configuration",
+    "claim": "Signing secrets and notification URLs are encrypted at rest.",
+    "where": "privacy page, README",
+    "test": "cargo test signing_secrets_and_notification_urls_are_encrypted_at_rest",
+    "sandbox": "temporary SQLite database; create a signed alias and save a unique notification URL; assert neither plaintext is stored and both decrypt correctly"
+  },
+  {
+    "id": "retention-cleanup",
+    "claim": "Retention cleanup deletes expired payloads while keeping aggregate counts.",
+    "where": "Quiet rules, privacy page, README",
+    "test": "cargo test retention_cleanup_deletes_expired_payloads_and_keeps_aggregates",
+    "sandbox": "temporary SQLite database with one expired and one current encrypted event; run cleanup and assert only the old payload is removed while the fingerprint count remains"
+  },
+  {
     "id": "signed-ingress",
     "claim": "Endpoint aliases can verify HMAC-SHA256 signatures and group matching events.",
     "where": "How it works, dashboard, README",
     "test": "cargo test signed_webhook_is_received_and_grouped",
     "sandbox": "temporary SQLite database and in-process router with a generated alias and correctly signed webhook"
+  },
+  {
+    "id": "ingress-body-limit",
+    "claim": "Webhook ingress accepts payloads up to 256 KiB and rejects larger bodies.",
+    "where": "README",
+    "test": "cargo test ingress_accepts_256_kib_and_rejects_the_next_byte",
+    "sandbox": "temporary receiver alias; submit exactly 262144 bytes and then 262145 bytes; assert 202 then 400"
+  },
+  {
+    "id": "ingress-rate-limit",
+    "claim": "Webhook ingress allows a 200-request burst, refills at 100 requests per second, and returns 429 with Retry-After after the allowance.",
+    "where": "README",
+    "test": "cargo test ingress_burst_is_limited_per_forwarded_client_with_retry_after",
+    "sandbox": "in-process router; submit a 240-request concurrent burst from one forwarded client and assert the measured allowance, 429 responses, Retry-After, and client isolation"
+  },
+  {
+    "id": "notification-policy",
+    "claim": "Normal fingerprints enter a digest, high severity posts immediately, and record-only fingerprints do not notify.",
+    "where": "How it works, Quiet rules, README",
+    "test": "cargo test digest_high_and_record_only_rules_control_real_notification_posts",
+    "sandbox": "temporary SQLite database and local Slack-compatible JSON receiver; trigger all three policies and inspect the actual posts and pending counts"
   },
   {
     "id": "quiet-window",
@@ -56,17 +112,38 @@
     "sandbox": "fixed UTC timestamps covering an overnight quiet window and a daytime window"
   },
   {
+    "id": "responsive-keyboard",
+    "claim": "The dashboard works at 200% text size and supports keyboard tab and route navigation.",
+    "where": "README",
+    "test": "npx playwright test --grep @claim:responsive-keyboard",
+    "sandbox": "fresh 390px browser at 200% root text; assert no horizontal overflow, arrow-key tabs, route heading focus, announcements, and back-button focus"
+  },
+  {
     "id": "api-rate-limit",
-    "claim": "Dashboard API calls are limited per client and return 429 with Retry-After.",
+    "claim": "Dashboard API calls allow a 40-request burst per client and return 429 with Retry-After after the allowance.",
     "where": "README",
     "test": "cargo test unauthenticated_api_requests_are_rate_limited_before_authentication",
     "sandbox": "in-process router; send unauthenticated requests from one forwarded IP until 429, then verify another IP remains independent"
   },
   {
     "id": "zero-config-start",
-    "claim": "The production container starts with only PORT and persists generated secrets across restarts.",
+    "claim": "The production server starts with only PORT and reuses generated secrets across restarts.",
     "where": "README",
     "test": "cargo test --test runtime_startup production_binary_boots_with_only_port_and_reuses_persisted_secrets",
-    "sandbox": "fresh temporary working directory; start the release test binary twice with a cleared environment and only PORT"
+    "sandbox": "fresh temporary working directory; start the production binary twice with a cleared environment and only PORT"
+  },
+  {
+    "id": "durable-data-path",
+    "claim": "The production image stores SQLite and generated secrets together under the configured /data mount.",
+    "where": "README",
+    "test": "cargo test --test runtime_startup production_binary_writes_all_state_to_the_configured_data_mount",
+    "sandbox": "fresh temporary directory acting as the mounted data path; start the production binary and assert the database plus both generated secret files exist only there"
+  },
+  {
+    "id": "graceful-shutdown",
+    "claim": "The server shuts down cleanly on SIGTERM.",
+    "where": "README",
+    "test": "cargo test --test runtime_startup production_binary_exits_cleanly_on_sigterm",
+    "sandbox": "fresh production process; wait for health, send SIGTERM, and assert a successful exit within 2.5 seconds"
   }
 ]

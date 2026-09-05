@@ -49,6 +49,7 @@ pub struct AppConfig {
     pub encryption_key: [u8; 32],
     pub public_url: String,
     pub build_sha: String,
+    billing_base: String,
     secret_sources: SecretSources,
     secret_directory: PathBuf,
 }
@@ -78,8 +79,20 @@ struct SecretSources {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, AppError> {
-        let database_url = env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "sqlite://data/quiet-hours.db?mode=rwc".into());
+        let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
+            let data_directory = env::var("DATA_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+                let mounted = PathBuf::from("/data");
+                if mounted.is_dir() {
+                    mounted
+                } else {
+                    PathBuf::from("data")
+                }
+            });
+            format!(
+                "sqlite://{}/quiet-hours.db?mode=rwc",
+                data_directory.display()
+            )
+        });
         let secret_directory = secret_directory_for_database(&database_url);
         let (admin_token, admin_source) = resolve_admin_token(&secret_directory)?;
         let (encryption_key, encryption_source) = resolve_encryption_key(&secret_directory)?;
@@ -92,6 +105,10 @@ impl AppConfig {
                 .trim_end_matches('/')
                 .into(),
             build_sha: env::var("BUILD_SHA").unwrap_or_else(|_| "development".into()),
+            billing_base: env::var("BILLING_BASE")
+                .unwrap_or_else(|_| "https://api.sociobot.in".into())
+                .trim_end_matches('/')
+                .into(),
             secret_sources: SecretSources {
                 admin_token: admin_source,
                 encryption_key: encryption_source,
@@ -233,6 +250,7 @@ pub struct AppState {
     admin_hash: [u8; 32],
     public_url: String,
     build_sha: String,
+    billing_base: String,
     http: reqwest::Client,
     demos: Arc<RwLock<HashMap<String, DemoWorkspace>>>,
 }
@@ -264,6 +282,7 @@ impl AppState {
             admin_hash: Sha256::digest(config.admin_token.as_bytes()).into(),
             public_url: config.public_url.clone(),
             build_sha: config.build_sha.clone(),
+            billing_base: config.billing_base.clone(),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(4))
                 .build()?,
@@ -313,6 +332,8 @@ pub enum AppError {
     Invalid(String),
     #[error("unauthorized")]
     Unauthorized,
+    #[error("paid license required")]
+    LicenseRequired,
 }
 
 impl IntoResponse for AppError {
@@ -322,6 +343,10 @@ impl IntoResponse for AppError {
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "Use the ADMIN_TOKEN configured on this server.",
+            ),
+            Self::LicenseRequired => (
+                StatusCode::PAYMENT_REQUIRED,
+                "Field Station is required for more than one alias or more than seven days of retention.",
             ),
             Self::NotFound => (StatusCode::NOT_FOUND, "That record no longer exists."),
             Self::Config(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.as_str()),
@@ -636,6 +661,7 @@ struct CreatedEndpoint {
 
 async fn create_endpoint(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<CreateEndpoint>,
 ) -> Result<(StatusCode, Json<CreatedEndpoint>), AppError> {
     let name = input.name.trim();
@@ -643,6 +669,12 @@ async fn create_endpoint(
         return Err(AppError::Invalid(
             "Alias name must be 2–60 characters.".into(),
         ));
+    }
+    let endpoint_count: i64 = sqlx::query_scalar("SELECT count(*) FROM endpoints")
+        .fetch_one(&state.pool)
+        .await?;
+    if endpoint_count >= 1 && !license_is_valid(&state, &headers).await? {
+        return Err(AppError::LicenseRequired);
     }
     let slug_base: String = name
         .to_lowercase()
@@ -1423,6 +1455,7 @@ struct SettingsUpdate {
 }
 async fn update_settings(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(i): Json<SettingsUpdate>,
 ) -> Result<StatusCode, AppError> {
     validate_time(&i.quiet_start)?;
@@ -1435,8 +1468,11 @@ async fn update_settings(
             "Digest interval must be 5–1,440 minutes.".into(),
         ));
     }
-    if !(1..=365).contains(&i.retention_days) {
-        return Err(AppError::Invalid("Retention must be 1–365 days.".into()));
+    if !(1..=90).contains(&i.retention_days) {
+        return Err(AppError::Invalid("Retention must be 1–90 days.".into()));
+    }
+    if i.retention_days > 7 && !license_is_valid(&state, &headers).await? {
+        return Err(AppError::LicenseRequired);
     }
     for (name, url) in [
         ("Notification URL", i.notification_url.trim()),
@@ -1457,6 +1493,35 @@ async fn update_settings(
     sqlx::query("UPDATE settings SET quiet_start=?,quiet_end=?,utc_offset_minutes=?,digest_minutes=?,retention_days=?,notification_url_encrypted=?,escalation_url=?,last_delivery_error=NULL,updated_at=? WHERE id=1")
         .bind(i.quiet_start).bind(i.quiet_end).bind(i.utc_offset_minutes).bind(i.digest_minutes).bind(i.retention_days).bind(encrypted).bind(if i.escalation_url.trim().is_empty(){None}else{Some(i.escalation_url.trim())}).bind(Utc::now().to_rfc3339()).execute(&state.pool).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct LicenseVerdict {
+    valid: bool,
+}
+
+async fn license_is_valid(state: &AppState, headers: &HeaderMap) -> Result<bool, AppError> {
+    let Some(license) = headers
+        .get("x-sociobot-license")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let verdict = state
+        .http
+        .get(format!(
+            "{}/api/v1/products/webhook-quiet-hours/verify",
+            state.billing_base
+        ))
+        .query(&[("license", license)])
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<LicenseVerdict>()
+        .await?;
+    Ok(verdict.valid)
 }
 fn validate_time(t: &str) -> Result<(), AppError> {
     let parts = t
@@ -1671,6 +1736,7 @@ mod tests {
             encryption_key: [7; 32],
             public_url: "http://localhost".into(),
             build_sha: "test".into(),
+            billing_base: "http://127.0.0.1:9".into(),
             secret_sources: SecretSources {
                 admin_token: SecretSource::Supplied,
                 encryption_key: SecretSource::Supplied,
@@ -1678,6 +1744,32 @@ mod tests {
             secret_directory: dir.clone(),
         };
         AppState::connect(&cfg).await.unwrap()
+    }
+
+    async fn start_json_receiver() -> (String, Arc<tokio::sync::Mutex<Vec<String>>>) {
+        async fn capture(
+            State(messages): State<Arc<tokio::sync::Mutex<Vec<String>>>>,
+            Json(body): Json<Value>,
+        ) -> StatusCode {
+            messages
+                .lock()
+                .await
+                .push(body["text"].as_str().unwrap_or_default().to_owned());
+            StatusCode::OK
+        }
+        let messages = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/notify", post(capture))
+            .with_state(messages.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (
+            format!("http://localhost:{}/notify", address.port()),
+            messages,
+        )
     }
     #[tokio::test]
     async fn encrypts_and_decrypts_payloads() {
@@ -2037,5 +2129,396 @@ mod tests {
                 .unwrap();
         assert_eq!(restored["high_unacknowledged"], 1);
         assert_eq!(restored["events_today"], 18);
+    }
+
+    // @claim:demo-expiry
+    #[tokio::test]
+    async fn demo_workspaces_expire_after_24_hours() {
+        let state = state().await;
+        let mut expired = seeded_demo_workspace();
+        expired.created_at = Utc::now() - ChronoDuration::hours(25);
+        state
+            .demos
+            .write()
+            .await
+            .insert("expired-workspace".into(), expired);
+
+        assert!(matches!(
+            demo_snapshot(&state, "expired-workspace").await,
+            Err(AppError::NotFound)
+        ));
+        assert!(!state.demos.read().await.contains_key("expired-workspace"));
+    }
+
+    // @claim:encrypted-configuration
+    #[tokio::test]
+    async fn signing_secrets_and_notification_urls_are_encrypted_at_rest() {
+        let state = state().await;
+        let (_, Json(created)) = create_endpoint(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateEndpoint {
+                name: "Encrypted source".into(),
+                require_signature: Some(true),
+            }),
+        )
+        .await
+        .unwrap();
+        let signing_secret = created.signing_secret.unwrap();
+        let notification_url = "https://hooks.example.test/services/private-marker";
+        update_settings(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SettingsUpdate {
+                quiet_start: "22:00".into(),
+                quiet_end: "08:00".into(),
+                utc_offset_minutes: 0,
+                digest_minutes: 60,
+                retention_days: 7,
+                notification_url: notification_url.into(),
+                escalation_url: String::new(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let stored_secret: Vec<u8> =
+            sqlx::query_scalar("SELECT signing_secret_encrypted FROM endpoints LIMIT 1")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        let stored_url: Vec<u8> =
+            sqlx::query_scalar("SELECT notification_url_encrypted FROM settings WHERE id=1")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert!(!String::from_utf8_lossy(&stored_secret).contains(&signing_secret));
+        assert!(!String::from_utf8_lossy(&stored_url).contains("private-marker"));
+        assert_eq!(
+            state.decrypt(&stored_secret).unwrap(),
+            signing_secret.as_bytes()
+        );
+        assert_eq!(
+            load_settings(&state).await.unwrap().notification_url,
+            notification_url
+        );
+    }
+
+    // @claim:retention-cleanup
+    #[tokio::test]
+    async fn retention_cleanup_deletes_expired_payloads_and_keeps_aggregates() {
+        let state = state().await;
+        sqlx::query("INSERT INTO endpoints(slug,name,token_hash,created_at) VALUES('retention','Retention','hash',?)")
+            .bind(Utc::now().to_rfc3339())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let endpoint: i64 = sqlx::query_scalar("SELECT id FROM endpoints WHERE slug='retention'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO fingerprints(fingerprint,endpoint_id,event_type,first_seen,last_seen,total_count,pending_count) VALUES('retained-count',?,'job.failed',?,?,2,2)")
+            .bind(endpoint)
+            .bind((Utc::now() - ChronoDuration::days(9)).to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        for (received_at, marker) in [
+            (
+                (Utc::now() - ChronoDuration::days(8)).to_rfc3339(),
+                b"old".as_slice(),
+            ),
+            (Utc::now().to_rfc3339(), b"current".as_slice()),
+        ] {
+            sqlx::query("INSERT INTO events(endpoint_id,fingerprint,event_type,received_at,payload_encrypted,signature_valid) VALUES(?,'retained-count','job.failed',?,?,1)")
+                .bind(endpoint)
+                .bind(received_at)
+                .bind(state.encrypt(marker).unwrap())
+                .execute(&state.pool)
+                .await
+                .unwrap();
+        }
+
+        cleanup(&state).await.unwrap();
+        let event_count: i64 = sqlx::query_scalar("SELECT count(*) FROM events")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        let aggregate_count: i64 = sqlx::query_scalar(
+            "SELECT total_count FROM fingerprints WHERE fingerprint='retained-count'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(event_count, 1);
+        assert_eq!(aggregate_count, 2);
+    }
+
+    // @claim:notification-policy
+    #[tokio::test]
+    async fn digest_high_and_record_only_rules_control_real_notification_posts() {
+        let state = state().await;
+        let (notification_url, messages) = start_json_receiver().await;
+        update_settings(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SettingsUpdate {
+                quiet_start: "22:00".into(),
+                quiet_end: "08:00".into(),
+                utc_offset_minutes: 0,
+                digest_minutes: 60,
+                retention_days: 7,
+                notification_url,
+                escalation_url: "https://runbook.example.test/incidents".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO endpoints(slug,name,token_hash,created_at) VALUES('notify','Notify','hash',?)")
+            .bind(Utc::now().to_rfc3339())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let endpoint: i64 = sqlx::query_scalar("SELECT id FROM endpoints WHERE slug='notify'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        for (fingerprint, event_type, severity) in [
+            ("normal-item", "invoice.failed", "normal"),
+            ("high-item", "deployment.failed", "normal"),
+            ("ignored-item", "backup.completed", "ignored"),
+        ] {
+            sqlx::query("INSERT INTO fingerprints(fingerprint,endpoint_id,event_type,first_seen,last_seen,total_count,pending_count,severity) VALUES(?,?,?,?,?,1,1,?)")
+                .bind(fingerprint)
+                .bind(endpoint)
+                .bind(event_type)
+                .bind((Utc::now() - ChronoDuration::hours(2)).to_rfc3339())
+                .bind(Utc::now().to_rfc3339())
+                .bind(severity)
+                .execute(&state.pool)
+                .await
+                .unwrap();
+        }
+
+        update_fingerprint(
+            State(state.clone()),
+            Path("high-item".into()),
+            Json(FingerprintUpdate {
+                severity: "high".into(),
+                target_minutes: 30,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(run_digest(&state, true).await.unwrap(), 1);
+
+        let messages = messages.lock().await;
+        assert_eq!(messages.len(), 2);
+        assert!(messages
+            .iter()
+            .any(|text| text.contains("High-severity webhook: deployment.failed")));
+        assert!(messages
+            .iter()
+            .any(|text| text.contains("Webhook digest") && text.contains("invoice.failed")));
+        assert!(!messages
+            .iter()
+            .any(|text| text.contains("backup.completed")));
+        drop(messages);
+        let ignored_pending: i64 = sqlx::query_scalar(
+            "SELECT pending_count FROM fingerprints WHERE fingerprint='ignored-item'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(ignored_pending, 1);
+    }
+
+    // @claim:ingress-body-limit
+    #[tokio::test]
+    async fn ingress_accepts_256_kib_and_rejects_the_next_byte() {
+        let state = state().await;
+        let (_, Json(created)) = create_endpoint(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateEndpoint {
+                name: "Body boundary".into(),
+                require_signature: Some(false),
+            }),
+        )
+        .await
+        .unwrap();
+        let path = created.hook_url.strip_prefix("http://localhost").unwrap();
+        let app = build_app(state, tempfile::tempdir().unwrap().path().to_path_buf());
+        let request = |size: usize, ip: &str| {
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("x-forwarded-for", ip)
+                .body(Body::from(vec![b'x'; size]))
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(262_144, "203.0.113.121"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            app.oneshot(request(262_145, "203.0.113.122"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // @claim:ingress-rate-limit
+    #[tokio::test]
+    async fn ingress_burst_is_limited_per_forwarded_client_with_retry_after() {
+        let app = build_app(
+            state().await,
+            tempfile::tempdir().unwrap().path().to_path_buf(),
+        );
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..240 {
+            let app = app.clone();
+            tasks.spawn(async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/hooks/missing?key=invalid")
+                        .header("x-forwarded-for", "203.0.113.131")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            });
+        }
+        let mut allowed = 0;
+        let mut limited = 0;
+        while let Some(response) = tasks.join_next().await {
+            let response = response.unwrap();
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                limited += 1;
+                assert!(response.headers().contains_key(header::RETRY_AFTER));
+            } else {
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+                allowed += 1;
+            }
+        }
+        assert!(
+            (190..=220).contains(&allowed),
+            "observed burst allowance: {allowed}"
+        );
+        assert!(limited >= 20, "the 240-request burst was not limited");
+        let other = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/hooks/missing?key=invalid")
+                    .header("x-forwarded-for", "203.0.113.132")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(other.status(), StatusCode::NOT_FOUND);
+    }
+
+    // @claim:paid-limits
+    #[tokio::test]
+    async fn free_limits_reject_paid_actions_until_the_license_is_valid() {
+        async fn verify(Query(query): Query<HashMap<String, String>>) -> Json<Value> {
+            Json(
+                json!({"valid": query.get("license").is_some_and(|value| value == "valid-license"), "reason":"fixture"}),
+            )
+        }
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let billing_base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/api/v1/products/webhook-quiet-hours/verify", get(verify)),
+            )
+            .await
+            .unwrap()
+        });
+        let mut state = state().await;
+        state.billing_base = billing_base;
+        let app = build_app(state, tempfile::tempdir().unwrap().path().to_path_buf());
+        let create = |name: &str, license: Option<&str>, ip: &str| {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/endpoints")
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-for", ip);
+            if let Some(license) = license {
+                request = request.header("x-sociobot-license", license);
+            }
+            request
+                .body(Body::from(
+                    json!({"name":name,"require_signature":false}).to_string(),
+                ))
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(create("Free alias", None, "203.0.113.141"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(create("Blocked alias", None, "203.0.113.142"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::PAYMENT_REQUIRED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(create("Paid alias", Some("valid-license"), "203.0.113.143"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let settings_body = json!({"quiet_start":"22:00","quiet_end":"08:00","utc_offset_minutes":0,"digest_minutes":60,"retention_days":90,"notification_url":"","escalation_url":""}).to_string();
+        let settings = |license: Option<&str>, ip: &str| {
+            let mut request = Request::builder()
+                .method("PUT")
+                .uri("/api/settings")
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-for", ip);
+            if let Some(license) = license {
+                request = request.header("x-sociobot-license", license);
+            }
+            request.body(Body::from(settings_body.clone())).unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(settings(None, "203.0.113.144"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::PAYMENT_REQUIRED
+        );
+        assert_eq!(
+            app.oneshot(settings(Some("valid-license"), "203.0.113.145"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
     }
 }

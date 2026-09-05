@@ -11,7 +11,7 @@ test('@claim:demo-sandbox opens an isolated seeded workspace and resets it', asy
   });
   await page.goto('/demo');
 
-  await expect(page.getByRole('heading', { level: 1, name: 'Sample webhook observations' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Sample webhook failures' })).toBeVisible();
   await expect(page.getByLabel('Demo status')).toContainText('Demo — sample data, nothing is saved');
   await expect(page.getByText('Deploy monitor').first()).toBeVisible();
   expect(demoRequests.length).toBeGreaterThan(0);
@@ -74,7 +74,7 @@ test('@claim:privacy-same-origin demo flow sends no cross-origin requests', asyn
   expect([...origins]).toEqual(['http://127.0.0.1:4173']);
 });
 
-test('@claim:one-time-price keeps core demo actions open and states the exact optional price', async ({ page }) => {
+test('@claim:one-time-price keeps core actions open and starts the registered $39 checkout', async ({ page, request }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Add aliases and longer retention' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Buy Field Station for $39 once' })).toBeVisible();
@@ -85,6 +85,97 @@ test('@claim:one-time-price keeps core demo actions open and states the exact op
   await page.getByRole('tab', { name: /Aliases/ }).click();
   await expect(page.getByText('One-time purchase · $39')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Buy for $39 once' })).toHaveAttribute('href', /api\.sociobot\.in\/api\/v1\/products\/webhook-quiet-hours\/checkout/);
+  const checkout = await request.get('https://api.sociobot.in/api/v1/products/webhook-quiet-hours/checkout', { maxRedirects: 0 });
+  expect(checkout.status()).toBe(303);
+  expect(checkout.headers().location).toMatch(/^https:\/\/checkout\.dodopayments\.com\/session\//);
+});
+
+test('demo provisioning failure shows a retry and recovers without an uncaught error', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  let attempts = 0;
+  await page.route('**/api/demo/session', async (route) => {
+    attempts += 1;
+    if (attempts === 1) await route.abort('failed');
+    else await route.continue();
+  });
+  await page.goto('/demo');
+  await expect(page.getByRole('heading', { name: 'Sample workspace did not open' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry sample data' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+  await page.getByRole('button', { name: 'Retry sample data' }).click();
+  await expect(page.getByRole('heading', { name: 'Sample webhook failures' })).toBeVisible();
+  await expect(page.getByText('Observed today').locator('..').locator('strong')).toHaveText('18');
+});
+
+test('@claim:responsive-keyboard populated demo reflows at 200% and routes announce focus', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => { document.documentElement.style.fontSize = '200%'; });
+  });
+  await page.goto('/demo');
+  await expect(page.getByRole('heading', { name: 'Sample webhook failures' })).toBeVisible();
+  expect(await page.evaluate(() => ({ width: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))).toEqual({ width: 390, client: 390 });
+
+  const observations = page.getByRole('tab', { name: 'Observations' });
+  await observations.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: /Aliases/ })).toBeFocused();
+  await page.locator('footer').getByRole('link', { name: 'Privacy' }).click();
+  const privacyHeading = page.getByRole('heading', { level: 1, name: 'Privacy' });
+  await expect(privacyHeading).toBeFocused();
+  await expect(page.locator('#route-status')).toHaveText('Privacy loaded');
+  await page.goBack();
+  await expect(page.getByRole('heading', { level: 1, name: 'Sample webhook failures' })).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('@claim:license-validation stores, verifies, caches, and sends a valid returned license for paid actions', async ({ page }) => {
+  const verifyRequests: string[] = [];
+  const paidHeaders: string[] = [];
+  let registeredLicenseActive = true;
+  await page.addInitScript(() => sessionStorage.setItem('qh_admin_token', 'qa-token'));
+  await page.route('https://api.sociobot.in/api/v1/products/webhook-quiet-hours/verify**', async (route) => {
+    verifyRequests.push(route.request().url());
+    const license = new URL(route.request().url()).searchParams.get('license');
+    const valid = license === 'valid-license' && registeredLicenseActive;
+    await route.fulfill({ json: { valid, reason: valid ? 'ok' : 'revoked', expires_at: null } });
+  });
+  await page.route('http://127.0.0.1:4173/api/**', async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'PUT' && path.endsWith('/settings')) {
+      paidHeaders.push(await request.headerValue('x-sociobot-license') || '');
+      return route.fulfill({ status: 204 });
+    }
+    if (path.endsWith('/summary')) return route.fulfill({ json: { endpoints: 1, fingerprints: 0, events_today: 0, pending: 0, compressed: 0, high_unacknowledged: 0 } });
+    if (path.endsWith('/endpoints')) return route.fulfill({ json: [{ id: 1, slug: 'paid', name: 'Paid source', signature_required: true, created_at: '2026-09-05T00:00:00Z' }] });
+    if (path.endsWith('/fingerprints')) return route.fulfill({ json: [] });
+    return route.fulfill({ json: { quiet_start: '22:00', quiet_end: '08:00', utc_offset_minutes: 0, digest_minutes: 60, retention_days: 7, notification_configured: false, notification_url: '', escalation_url: '', last_delivery_error: null } });
+  });
+
+  await page.goto('/?license=valid-license');
+  await expect(page).toHaveURL('/');
+  expect(await page.evaluate(() => localStorage.getItem('sb_license:webhook-quiet-hours'))).toBe('valid-license');
+  await page.getByRole('tab', { name: 'Quiet rules' }).click();
+  await expect(page.getByLabel('Delete retained payloads after')).toContainText('90 days');
+  await page.getByLabel('Delete retained payloads after').selectOption('90');
+  await page.getByRole('button', { name: 'Save quiet rules' }).click();
+  await expect.poll(() => paidHeaders).toEqual(['valid-license']);
+  expect(verifyRequests).toHaveLength(1);
+
+  await page.reload();
+  await page.getByRole('tab', { name: 'Quiet rules' }).click();
+  await expect(page.getByLabel('Delete retained payloads after')).toContainText('90 days');
+  expect(verifyRequests).toHaveLength(1);
+
+  registeredLicenseActive = false;
+  await page.evaluate(() => localStorage.setItem('sb_license_verdict:webhook-quiet-hours', JSON.stringify({ valid: true, checked_at: 0 })));
+  await page.reload();
+  await expect(page.locator('#live-status')).toContainText('License no longer active');
+  await page.getByRole('tab', { name: 'Quiet rules' }).click();
+  await expect(page.getByLabel('Delete retained payloads after')).not.toContainText('90 days');
+  expect(verifyRequests).toHaveLength(2);
 });
 
 for (const viewport of [{ name: 'mobile', width: 390, height: 844 }, { name: 'desktop', width: 1440, height: 900 }]) {
@@ -117,7 +208,7 @@ test('plain first screen and keyboard path lead directly to sample data', async 
   await expect(action).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/\/demo$/);
-  await expect(page.getByRole('heading', { level: 1, name: 'Sample webhook observations' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Sample webhook failures' })).toBeVisible();
 });
 
 test('paid inline link and demo controls meet 44px touch target minimum', async ({ page }) => {
@@ -134,6 +225,22 @@ test('paid inline link and demo controls meet 44px touch target minimum', async 
     expect(box!.height).toBeGreaterThanOrEqual(44);
     expect(box!.width).toBeGreaterThanOrEqual(44);
   }
+
+  await page.goto('/');
+  const privacyNotice = page.locator('.legal-links').getByRole('link', { name: 'privacy notice' });
+  const terms = page.locator('.legal-links').getByRole('link', { name: 'terms', exact: true });
+  for (const target of [privacyNotice, terms]) {
+    const box = await target.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+  }
+  await privacyNotice.click();
+  const privacyReturn = page.getByRole('link', { name: 'Return to Webhook Quiet Hours' });
+  expect((await privacyReturn.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.goBack();
+  await terms.click();
+  const termsReturn = page.getByRole('link', { name: 'Return to Webhook Quiet Hours' });
+  expect((await termsReturn.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 });
 
 test('license dialog manages keyboard focus and reduced motion removes transforms', async ({ page }) => {
@@ -181,7 +288,7 @@ test('discovery metadata and the designed 404 route are real responses', async (
 
   const response = await page.goto('/missing-field-note');
   expect(response?.status()).toBe(404);
-  await expect(page.getByRole('heading', { level: 1, name: 'This page is not in the field log' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'This page does not exist' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Return home' })).toBeVisible();
 });
 
