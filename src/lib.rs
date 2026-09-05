@@ -273,7 +273,11 @@ impl AppState {
             .database_url
             .parse::<SqliteConnectOptions>()?
             .busy_timeout(Duration::from_secs(30))
-            .foreign_keys(true);
+            .foreign_keys(true)
+            // The fleet persists /data on a network share. SQLite's dot-file
+            // VFS provides whole-database locking without relying on byte-range
+            // locks that the mounted filesystem does not preserve correctly.
+            .vfs("unix-dotfile");
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(connect_options)

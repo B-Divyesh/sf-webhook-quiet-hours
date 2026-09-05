@@ -202,9 +202,9 @@ async fn production_binary_exits_cleanly_on_sigterm() {
 async fn production_binary_writes_all_state_to_the_configured_data_mount() {
     let working_directory = tempfile::tempdir().unwrap();
     let data_mount = tempfile::tempdir().unwrap();
-    let port = unused_port();
-    let mut child = start_with_data_mount(working_directory.path(), data_mount.path(), port);
-    let _client = wait_until_ready(&mut child, port).await;
+    let first_port = unused_port();
+    let mut first = start_with_data_mount(working_directory.path(), data_mount.path(), first_port);
+    let client = wait_until_ready(&mut first, first_port).await;
 
     for name in [
         "webhook-quiet-hours.sqlite3",
@@ -217,5 +217,24 @@ async fn production_binary_writes_all_state_to_the_configured_data_mount() {
         );
     }
     assert!(!working_directory.path().join("data").exists());
-    let _ = stop_and_read_logs(child);
+
+    // A replacement revision must be able to open the same mounted database
+    // while the ready revision is still serving requests.
+    let second_port = unused_port();
+    let mut second =
+        start_with_data_mount(working_directory.path(), data_mount.path(), second_port);
+    let second_client = wait_until_ready(&mut second, second_port).await;
+    let token = std::fs::read_to_string(data_mount.path().join("admin-token")).unwrap();
+    for (http, port) in [(&client, first_port), (&second_client, second_port)] {
+        let response = http
+            .get(format!("http://127.0.0.1:{port}/api/summary"))
+            .bearer_auth(token.trim())
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+
+    let _ = stop_and_read_logs(second);
+    let _ = stop_and_read_logs(first);
 }
