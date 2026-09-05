@@ -18,7 +18,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system quiet-hours \
     && useradd --system --gid quiet-hours --home-dir /app quiet-hours \
-    && mkdir -p /data \
+    && mkdir -p /app /data \
     && chown -R quiet-hours:quiet-hours /app /data
 WORKDIR /app
 COPY --from=rust-builder /build/target/release/webhook-quiet-hours /usr/local/bin/webhook-quiet-hours
