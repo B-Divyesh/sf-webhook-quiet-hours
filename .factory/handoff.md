@@ -1,52 +1,37 @@
-# Webhook Quiet Hours — review 1 handoff
+# Webhook Quiet Hours — review 2 handoff
 
 ## Status
 
-Independent review 1 passed with zero findings and zero untested claims. No
-product code was changed. The implementation reviewed is
-`eb8b5e072ce0f47d70b3d954c5c104330ac14465`; the repository documentation
-baseline was `c794ef8a6e3c243c64c0064acb101804a6c7f2dd`. Live `/health` reports
-documentation commit `10eab6c88a98c3844a7c2da19aec77d26de48839`.
+**PASS — 0 findings and 0 untested claims.** No product code was changed.
 
-The commits after `eb8b5e0` contain only README and factory documentation
-changes. A clean build's HTML, JavaScript, and CSS hashes exactly match the live
-assets, so no new product image is required for the report-only commits.
-
-Full review: [.factory/review-1.md](review-1.md).
+The reviewed implementation is `eb8b5e072ce0f47d70b3d954c5c104330ac14465`.
+The documentation baseline is `48d8295e7f8898e7fd7d073fd9e6419bcaac6b6b`.
+Live `/health` identifies deployed build `10eab6c88a98c3844a7c2da19aec77d26de48839`;
+the deltas after the implementation are documentation/report changes only.
 
 ## What was verified
 
-- Fresh phone and desktop browsers identified the job, audience, and
+- Fresh phone and desktop browsers identified the job, intended team, and
   **Try it with sample data** action before scrolling.
-- The one-click demo showed 18 deliveries, 3 fingerprints, and 15 compressed
-  repeats. Its sample label persisted through detail, acknowledgement, reload,
-  and reset. Leaving removed the separate demo namespace.
-- Forced demo provisioning failure recovered through the named retry action.
-- All 21 declared claim commands passed independently. The complete `npm test`
-  suite, checks, production build, release build, and dependency audit passed.
-- Empty, invalid, boundary, recovery, notification, encryption, retention,
-  startup, mounted-data persistence, and graceful-shutdown paths passed.
-- A live API burst returned exactly 40 unauthorized responses and then 20
-  rate-limit responses with `Retry-After`; a second client remained independent.
-- Live and test checkout each returned 303 to the correct Dodo host and then
-  HTTP 200. Both pages showed Webhook Quiet Hours Field Station for USD 39 once.
-  Both real verify endpoints rejected an invalid token, and the UI remained on
-  the free tier. Recorded-verdict tests cover valid, cached, revoked, and
-  server-enforced entitlement paths.
-- `/`, `/demo`, `/privacy`, `/terms`, and the designed HTTP 404 passed phone and
-  desktop, light and dark axe checks with no serious or critical findings.
-  Keyboard routing, focus, announcements, 200% text, 44 px targets, reduced
-  motion, offline reload, privacy request boundaries, route titles, discovery
-  files, and security/cache headers passed.
-- Lighthouse mobile: Performance 100, Accessibility 100, Best Practices 100,
-  SEO 100; LCP 1,080 ms, total blocking time 0 ms, CLS 0.
+- The live one-click demo populated realistic data, preserved its sample label
+  across acknowledgement and reload, reset safely, exited without real data,
+  and used only product-origin requests.
+- All 21 exact declared claim commands passed independently after `npm ci`.
+- `npm audit --audit-level=high`, `npm run check`, `npm run build`,
+  `cargo build --release --locked`, and `npm test` passed. The full test suite
+  reported 3 Vitest, 17 Rust unit/router, 3 runtime, and 20 Playwright tests.
+- Live checkout in test and live modes reached HTTP 200 Dodo pages displaying
+  Webhook Quiet Hours Field Station for $39. Actual invalid license validation
+  rejected the harmless token; recorded valid/revoked and server limit flows
+  are covered by direct claims.
+- Route, keyboard, reduced-motion, offline, privacy, live rate-limit,
+  security-header, phone/desktop axe, and designed 404 checks passed.
+- Fresh Lighthouse mobile: Performance 99, Accessibility 100, Best Practices
+  100, SEO 100; LCP 1,163 ms, TBT 136 ms, CLS 0.
 
-No real receiver data, notification destination, customer record, payment, or
-license was created or changed.
+## Run and verify
 
-## Run locally
-
-```bash
+```sh
 npm ci
 npm audit --audit-level=high
 npm run check
@@ -55,18 +40,14 @@ cargo build --release --locked
 npm test
 ```
 
-Run each public claim with the exact command in `.factory/claims.json`. The
-sample entry point is `https://webhook-quiet-hours.sociobot.in/demo`.
+Run each command listed in `.factory/claims.json` exactly. The public sample
+entry point is `https://webhook-quiet-hours.sociobot.in/demo`.
 
-## Evidence
+## Evidence and next steps
 
-Review evidence is in `/work/.evidence/webhook-quiet-hours-review-1/`. The
-factory-facing copies are `/work/.evidence/qa-report.md` and
+Review evidence is at `/work/.evidence/webhook-quiet-hours-review-2/`; the
+factory-facing report and result are `/work/.evidence/qa-report.md` and
 `/work/.evidence/qa-result.json`.
 
-## Known gaps
-
-No product finding remains. A real paid purchase was intentionally not made;
-checkout availability, the displayed offer, invalid live validation, client
-locking, and server entitlement boundaries were verified without creating a
-customer or payment.
+No known product gaps remain. No real receiver data, notification destination,
+payment, customer, or paid license was created or changed during review.
